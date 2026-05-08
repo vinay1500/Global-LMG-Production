@@ -50,13 +50,15 @@ describe('Razorpay signature helpers', () => {
   });
 
   it('rejects non-hex signatures cleanly', () => {
-    expect(
-      verifyRazorpaySignature({
-        message,
-        secret,
-        signature: 'not-a-valid-hex-signature',
-      })
-    ).toBe(false);
+    for (const signature of ['not-a-valid-hex-signature', 'zzzz', '']) {
+      expect(
+        verifyRazorpaySignature({
+          message,
+          secret,
+          signature,
+        })
+      ).toBe(false);
+    }
   });
 
   it('fails safely for hex signatures with the wrong length', () => {
