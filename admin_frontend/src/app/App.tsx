@@ -5,6 +5,18 @@ import { AdminRoutes } from './router';
 
 type AdminRuntimeGuardState = {
   error: Error | null;
+  errorReferenceId: string | null;
+};
+
+const createErrorReferenceId = (error: Error) => {
+  const input = `${error.message}${Date.now()}`;
+  let hash = 0;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash = Math.imul(31, hash) + input.charCodeAt(index);
+  }
+
+  return Math.abs(hash).toString(36).padStart(8, '0').slice(0, 8);
 };
 
 class AdminRuntimeGuard extends React.Component<
@@ -13,10 +25,14 @@ class AdminRuntimeGuard extends React.Component<
 > {
   state: AdminRuntimeGuardState = {
     error: null,
+    errorReferenceId: null,
   };
 
   static getDerivedStateFromError(error: Error): AdminRuntimeGuardState {
-    return { error };
+    return {
+      error,
+      errorReferenceId: createErrorReferenceId(error),
+    };
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
@@ -43,10 +59,13 @@ class AdminRuntimeGuard extends React.Component<
             </p>
             <div className="mt-6 rounded-xl border border-[#F5C2C7] bg-[#FDE8EC] p-4 text-sm text-[#8B1E2D]">
               <p className="font-semibold">{this.state.error.message}</p>
-              {this.state.error.stack ? (
+              {import.meta.env.DEV && this.state.error.stack ? (
                 <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs">
                   {this.state.error.stack}
                 </pre>
+              ) : null}
+              {!import.meta.env.DEV && this.state.errorReferenceId ? (
+                <p className="mt-3 text-xs">Reference: {this.state.errorReferenceId}</p>
               ) : null}
             </div>
           </div>

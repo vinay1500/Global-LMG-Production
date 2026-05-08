@@ -2,10 +2,11 @@ import { type Request, type Response, Router } from 'express';
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import { createSignedCsrfToken, verifySignedCsrfToken } from '../lib/authCrypto.js';
-import { asyncHandler, forbidden } from '../lib/httpErrors.js';
+import { asyncHandler, forbidden, tooManyRequests } from '../lib/httpErrors.js';
 import { appendCookie, clearCookie, parseCookies } from '../lib/httpCookies.js';
 import { recordSecurityEventSafely } from '../lib/securityEvents.js';
 import { authService } from '../modules/auth/authService.js';
+import { consumePersistentRateLimit } from '../modules/auth/persistentRateLimiter.js';
 
 const authRouter = Router();
 
@@ -117,6 +118,30 @@ const requireCsrf = (request: Request, response: Response) => {
   }
 };
 
+const assertSignOutRateLimit = async (request: Request) => {
+  const rateLimit = await consumePersistentRateLimit({
+    key: `signout:ip:${getRequestIpAddress(request)}`,
+    maxAttempts: env.AUTH_RATE_LIMIT_IP_MAX_ATTEMPTS,
+    scope: 'client_auth',
+    windowMs: env.AUTH_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+  });
+
+  if (!rateLimit.allowed) {
+    recordSecurityEventSafely({
+      eventTypeCode: 'client.rate_limit_blocked',
+      identifierValue: `signout:ip:${getRequestIpAddress(request)}`,
+      ipAddress: getRequestIpAddress(request),
+      success: false,
+      userAgent: getUserAgent(request),
+    });
+    throw tooManyRequests(
+      'too_many_attempts',
+      'Too many attempts. Please wait before trying again.',
+      rateLimit.retryAfterSeconds
+    );
+  }
+};
+
 const setSessionCookie = (
   response: Response,
   rawToken: string,
@@ -139,6 +164,7 @@ const setFlowCookie = (response: Response, rawToken: string) => {
 
 const clearSessionArtifacts = (response: Response) => {
   clearCookie(response, env.SESSION_COOKIE_NAME, cookieSecurity);
+  clearCookie(response, env.CSRF_COOKIE_NAME, cookieSecurity);
   clearCookie(response, env.AUTH_FLOW_COOKIE_NAME, cookieSecurity);
 };
 
@@ -340,7 +366,8 @@ authRouter.post(
 authRouter.post(
   '/auth/sign-out',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    await assertSignOutRateLimit(request);
+    // Logout is session termination; OWASP treats it as a user safety control, so stale CSRF state must not block the bound session holder.
     const cookies = getCookies(request.headers.cookie);
     await authService.signOut(cookies[env.SESSION_COOKIE_NAME]);
     clearSessionArtifacts(response);

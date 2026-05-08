@@ -120,6 +120,15 @@ billingRouter.post(
   '/billing/refunds',
   asyncHandler(async (request, response) => {
     const actor = await requireMutationPermission(request, 'refund.manage');
-    response.status(201).json(await createRefund(actor, createRefundSchema.parse(request.body)));
+    const payload = createRefundSchema.parse(request.body);
+    const result = await runIdempotentJson(request, {
+      actorKey: actor.id,
+      actorUserId: actor.userId,
+      operation: () => createRefund(actor, payload),
+      scope: 'admin:billing:refund:create',
+      statusCode: 201,
+    });
+    response.setHeader('Idempotency-Replayed', result.replayed ? 'true' : 'false');
+    response.status(result.statusCode).json(result.body);
   })
 );

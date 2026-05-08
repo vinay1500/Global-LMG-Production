@@ -17,7 +17,6 @@ import {
   ChevronRight
 } from 'lucide-react';
 import {
-  DEFAULT_REQUEST_PRICING_CONFIG,
   type ConsultationMode,
   type RequestWizardConsultationMode,
   type RequestWizardPricingConfig,
@@ -196,18 +195,26 @@ const buildPreferredWindowSnapshot = (preferredDate: string, preferredTime: stri
   };
 };
 
+const PRICING_UNAVAILABLE_MESSAGE = 'Pricing temporarily unavailable — please refresh in a minute';
+
+const hasRequiredPricingArray = <T,>(value: T[] | null | undefined): value is T[] =>
+  Array.isArray(value) && value.length > 0;
+
+const hasUsablePricingConfig = (
+  config: Partial<RequestWizardPricingConfig> | null | undefined
+) =>
+  hasRequiredPricingArray(config?.services) &&
+  hasRequiredPricingArray(config?.consultationModes) &&
+  hasRequiredPricingArray(config?.urgencyOptions) &&
+  hasRequiredPricingArray(config?.legalDomains) &&
+  Boolean(config?.countryPricing?.countryCode) &&
+  Boolean(config?.countryPricing?.currencyCode || config?.currencyCode || config?.detectedCurrency);
+
 const normalizePricingConfig = (config: RequestWizardPricingConfig): RequestWizardPricingConfig => ({
-  ...DEFAULT_REQUEST_PRICING_CONFIG,
   ...config,
-  consultationModes:
-    (config.consultationModes || []).length > 0
-      ? config.consultationModes
-      : DEFAULT_REQUEST_PRICING_CONFIG.consultationModes,
-  services: (config.services || []).length > 0 ? config.services : DEFAULT_REQUEST_PRICING_CONFIG.services,
-  legalDomains:
-    (config.legalDomains || []).length > 0
-      ? config.legalDomains
-      : DEFAULT_REQUEST_PRICING_CONFIG.legalDomains,
+  consultationModes: config.consultationModes || [],
+  services: config.services || [],
+  legalDomains: config.legalDomains || [],
   urgencyOptions:
     (config.urgencyOptions || []).length > 0
       ? config.urgencyOptions.map((urgency) => ({
@@ -221,7 +228,7 @@ const normalizePricingConfig = (config: RequestWizardPricingConfig): RequestWiza
           minResponseHours: urgency.minResponseHours === undefined ? null : urgency.minResponseHours,
           timingLabel: urgency.timingLabel || '',
         }))
-      : DEFAULT_REQUEST_PRICING_CONFIG.urgencyOptions,
+      : [],
 });
 
 export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
@@ -259,9 +266,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
   const [formData, setFormData] = useState<RequestData>(createInitialFormData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [pricingConfig, setPricingConfig] = useState<RequestWizardPricingConfig>(
-    DEFAULT_REQUEST_PRICING_CONFIG
-  );
+  const [pricingConfig, setPricingConfig] = useState<RequestWizardPricingConfig | null>(null);
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [localCurrencyEstimate, setLocalCurrencyEstimate] = useState<LocalCurrencyEstimate | null>(null);
@@ -281,6 +286,19 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
       .getRequestPricingConfig()
       .then((config) => {
         if (didCancel) {
+          return;
+        }
+
+        if (!hasUsablePricingConfig(config)) {
+          setPricingConfig(null);
+          setConfigError(PRICING_UNAVAILABLE_MESSAGE);
+          setFormData((current) => ({
+            ...current,
+            consultationMode: '',
+            legalDomain: '',
+            services: [],
+            urgency: '',
+          }));
           return;
         }
 
@@ -311,12 +329,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
             ? error.message
             : 'Unable to load current pricing configuration. Please try again.'
         );
-        setPricingConfig({
-          ...DEFAULT_REQUEST_PRICING_CONFIG,
-          consultationModes: [],
-          services: [],
-          urgencyOptions: [],
-        });
+        setPricingConfig(null);
       })
       .finally(() => {
         if (!didCancel) {
@@ -341,9 +354,9 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
   }, [clientTimeZone, isOpen]);
 
   const localCurrencyCode = useMemo(() => {
-    const currency = getCountryCurrency(pricingConfig.countryPricing.countryCode || billingCountryCode);
+    const currency = getCountryCurrency(pricingConfig?.countryPricing.countryCode || billingCountryCode);
     return currency && currency !== 'USD' ? currency : null;
-  }, [billingCountryCode, pricingConfig.countryPricing.countryCode]);
+  }, [billingCountryCode, pricingConfig?.countryPricing.countryCode]);
 
   useEffect(() => {
     if (!isOpen || !localCurrencyCode) {
@@ -364,10 +377,11 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
     };
   }, [isOpen, localCurrencyCode]);
 
-  const services = pricingConfig.services;
-  const legalDomains = pricingConfig.legalDomains;
-  const consultationModes = pricingConfig.consultationModes;
-  const urgencyOptions = pricingConfig.urgencyOptions;
+  const services = pricingConfig?.services || [];
+  const legalDomains = pricingConfig?.legalDomains || [];
+  const consultationModes = pricingConfig?.consultationModes || [];
+  const urgencyOptions = pricingConfig?.urgencyOptions || [];
+  const isPricingUnavailable = Boolean(configError) || !pricingConfig;
   const selectedServices = useMemo(
     () => services.filter((service) => formData.services.includes(service.id)),
     [formData.services, services]
@@ -404,6 +418,10 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
   }, [availableUrgencyIds, availableUrgencyOptions, formData.urgency, isOpen]);
 
   const handleNext = () => {
+    if (isPricingUnavailable) {
+      return;
+    }
+
     if (currentStep < totalSteps) {
       setCurrentStep(currentStep + 1);
     }
@@ -450,7 +468,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
   };
 
   const handleSubmit = async () => {
-    if (isSubmitting) {
+    if (isSubmitting || isPricingUnavailable) {
       return;
     }
 
@@ -1011,7 +1029,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
                 disabled={
                   isSubmitting ||
                   isLoadingConfig ||
-                  Boolean(configError) ||
+                  isPricingUnavailable ||
                   (currentStep === 1 && (!formData.fullName || !formData.email || !formData.mobile)) ||
                   (currentStep === 2 && formData.services.length === 0) ||
                   (currentStep === 3 && !formData.legalDomain) ||
@@ -1029,7 +1047,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
             ) : (
               <button
                 onClick={handleSubmit}
-                disabled={isSubmitting || isLoadingConfig || Boolean(configError)}
+                disabled={isSubmitting || isLoadingConfig || isPricingUnavailable}
                 className="px-8 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-700 transition-colors disabled:cursor-not-allowed disabled:opacity-60 flex items-center gap-2"
               >
                 {isSubmitting ? 'Submitting...' : 'Submit Request'} <CheckCircle size={18} />

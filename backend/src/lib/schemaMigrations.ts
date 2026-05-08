@@ -4789,4 +4789,86 @@ export const NORMALIZED_MIGRATIONS: SchemaMigrationDefinition[] = [
        WHERE currency_code <> 'USD'`,
     ],
   },
+  {
+    id: '042-admin-notification-audit-permissions',
+    description:
+      'Add dedicated admin notification and audit permissions and grant them to default admin roles.',
+    statements: [
+      `INSERT INTO permissions (code, module_name, action_name, description, created_at, updated_at)
+       VALUES
+         ('notification.view', 'notification', 'view', 'View admin notifications', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('notification.manage', 'notification', 'manage', 'Manage admin notifications', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('audit.view', 'audit', 'view', 'View audit events', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+       ON DUPLICATE KEY UPDATE
+         module_name = VALUES(module_name),
+         action_name = VALUES(action_name),
+         description = VALUES(description),
+         updated_at = VALUES(updated_at)`,
+      `INSERT INTO role_permissions (role_code, permission_code, granted_at)
+       SELECT role_code, permission_code, UTC_TIMESTAMP(6)
+       FROM (
+         SELECT 'ops_admin' AS role_code, 'notification.view' AS permission_code
+         UNION ALL SELECT 'ops_admin', 'notification.manage'
+         UNION ALL SELECT 'ops_admin', 'audit.view'
+         UNION ALL SELECT 'case_manager', 'notification.view'
+         UNION ALL SELECT 'billing_admin', 'notification.view'
+       ) grants
+       WHERE EXISTS (SELECT 1 FROM roles WHERE code = grants.role_code)
+         AND EXISTS (SELECT 1 FROM permissions WHERE code = grants.permission_code)
+       ON DUPLICATE KEY UPDATE granted_at = VALUES(granted_at)`,
+    ],
+  },
+  {
+    id: '043-client-addresses-primary-uniqueness',
+    description:
+      'Enforce one active primary client address per client account using a generated unique marker.',
+    statements: [
+      `UPDATE client_addresses current_address
+       INNER JOIN (
+         SELECT client_account_id, MIN(id) AS keep_id
+         FROM client_addresses
+         WHERE archived_at IS NULL
+           AND is_primary = 1
+         GROUP BY client_account_id
+       ) kept
+         ON kept.client_account_id = current_address.client_account_id
+       SET current_address.is_primary = 0,
+           current_address.updated_at = CURRENT_TIMESTAMP(6)
+       WHERE current_address.archived_at IS NULL
+         AND current_address.is_primary = 1
+         AND current_address.id <> kept.keep_id`,
+      `/* MySQL unique indexes allow multiple NULL values. This generated marker is client_account_id only for active primary rows, and NULL for archived/non-primary rows. It is virtual to avoid MySQL stored-generated-column restrictions on columns that participate in cascading foreign keys. */
+       SET @client_addresses_has_primary_active_marker := (
+         SELECT COUNT(*)
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = 'client_addresses'
+           AND column_name = 'primary_active_marker'
+      )`,
+      `SET @add_client_addresses_primary_active_marker_sql := IF(
+         @client_addresses_has_primary_active_marker = 0,
+         'ALTER TABLE client_addresses ADD COLUMN primary_active_marker BIGINT UNSIGNED GENERATED ALWAYS AS (IF(is_primary = 1 AND archived_at IS NULL, client_account_id, NULL)) VIRTUAL',
+         'DO 0'
+       )`,
+      `PREPARE add_client_addresses_primary_active_marker_stmt FROM @add_client_addresses_primary_active_marker_sql`,
+      `EXECUTE add_client_addresses_primary_active_marker_stmt`,
+      `DEALLOCATE PREPARE add_client_addresses_primary_active_marker_stmt`,
+      `/* Enforce one active primary address per client account without constraining archived or non-primary address history. */
+       SET @client_addresses_has_active_primary_unique := (
+         SELECT COUNT(*)
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE()
+           AND table_name = 'client_addresses'
+           AND index_name = 'uq_client_addresses_active_primary'
+       )`,
+      `SET @add_client_addresses_active_primary_unique_sql := IF(
+         @client_addresses_has_active_primary_unique = 0,
+         'ALTER TABLE client_addresses ADD UNIQUE KEY uq_client_addresses_active_primary (primary_active_marker)',
+         'DO 0'
+       )`,
+      `PREPARE add_client_addresses_active_primary_unique_stmt FROM @add_client_addresses_active_primary_unique_sql`,
+      `EXECUTE add_client_addresses_active_primary_unique_stmt`,
+      `DEALLOCATE PREPARE add_client_addresses_active_primary_unique_stmt`,
+    ],
+  },
 ];

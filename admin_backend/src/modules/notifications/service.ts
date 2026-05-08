@@ -1,7 +1,8 @@
 import type { RowDataPacket } from 'mysql2/promise';
-import { notFound } from '../../lib/httpErrors.js';
+import { forbidden, notFound } from '../../lib/httpErrors.js';
 import { executeStatement, queryRows } from '../../lib/mysql.js';
 import { toUiDateTime } from '../../lib/viewModels.js';
+import type { AdminActor } from '../auth/service.js';
 import { buildPaginationMeta, normalizePagination } from '../shared.js';
 
 type NotificationRow = RowDataPacket & {
@@ -73,8 +74,9 @@ const deriveSource = (typeCode: string) => {
 };
 
 const getNotificationRecord = async (notificationId: string) => {
-  const rows = await queryRows<RowDataPacket & { dbId: number }>(
-    `SELECT id AS dbId
+  const rows = await queryRows<RowDataPacket & { dbId: number; recipientUserId: number }>(
+    `SELECT id AS dbId,
+            recipient_user_id AS recipientUserId
      FROM notifications
      WHERE public_id = ?
      LIMIT 1`,
@@ -88,6 +90,24 @@ const getNotificationRecord = async (notificationId: string) => {
   }
 
   return row;
+};
+
+const assertCanMutateNotification = (
+  actor: AdminActor,
+  notification: { recipientUserId: number }
+) => {
+  if (Number(notification.recipientUserId) === actor.userId) {
+    return;
+  }
+
+  if (actor.permissionCodes.includes('notification.manage')) {
+    return;
+  }
+
+  throw forbidden(
+    'notification_recipient_forbidden',
+    'You cannot update a notification assigned to another admin.'
+  );
 };
 
 export const listNotifications = async (options: { limit?: number; offset?: number } = {}) => {
@@ -169,8 +189,9 @@ export const listNotifications = async (options: { limit?: number; offset?: numb
   };
 };
 
-export const markRead = async (notificationId: string) => {
+export const markRead = async (actor: AdminActor, notificationId: string) => {
   const notification = await getNotificationRecord(notificationId);
+  assertCanMutateNotification(actor, notification);
 
   await executeStatement(
     `UPDATE notifications
@@ -183,8 +204,9 @@ export const markRead = async (notificationId: string) => {
   return { status: 'read' as const };
 };
 
-export const dismiss = async (notificationId: string) => {
+export const dismiss = async (actor: AdminActor, notificationId: string) => {
   const notification = await getNotificationRecord(notificationId);
+  assertCanMutateNotification(actor, notification);
 
   await executeStatement(
     `UPDATE notifications

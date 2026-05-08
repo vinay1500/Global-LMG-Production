@@ -15,7 +15,6 @@ import {
   createAuditEvent,
   createClientNotifications,
   resolveInvoiceByPublicId,
-  resolvePaymentByPublicId,
   touchMatterActivity,
 } from '../writeSupport.js';
 import { createPublicId } from '../../lib/authCrypto.js';
@@ -49,10 +48,17 @@ type PaymentSummaryRow = RowDataPacket & {
   clientAccountId: number;
   currencyCode: string;
   grossAmount: number;
+  id: number;
+  statusCode: string;
+};
+
+type PaymentInvoiceSummaryRow = RowDataPacket & {
   invoiceId: number | null;
   matterId: number | null;
+};
+
+type PaymentRefundedTotalRow = RowDataPacket & {
   refundedAmount: number;
-  statusCode: string;
 };
 
 type MatterBillingMetaRow = RowDataPacket & {
@@ -113,12 +119,24 @@ type DuplicatePaymentReferenceRow = RowDataPacket & {
   paymentId: string;
 };
 
+type ManualPaymentMethodCode = 'bank-transfer' | 'cash' | 'cheque' | 'online';
+
+type PaymentMethodLookupRow = RowDataPacket & {
+  id: number;
+};
+
 type InvoiceEmailRecipientRow = RowDataPacket & {
   email: string | null;
 };
 
 const MONEY_PATTERN = /^\d+(?:\.\d{1,2})?$/;
 const ACTIVE_BILLING_CURRENCY_CODE = 'USD';
+const MANUAL_PAYMENT_METHOD_LABELS: Record<ManualPaymentMethodCode, string> = {
+  'bank-transfer': 'Bank transfer',
+  cash: 'Cash',
+  cheque: 'Cheque',
+  online: 'Online manual payment',
+};
 
 const firstRow = <TRow>(rows: TRow[]) => rows[0] || null;
 
@@ -166,6 +184,82 @@ const normalizeMoney = (value: number | string) => {
 };
 
 const isDateOnly = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+const normalizeManualPaymentMethodCode = (value: string): ManualPaymentMethodCode => {
+  const normalized = value.trim().toLowerCase().replace(/_/g, '-');
+
+  if (normalized in MANUAL_PAYMENT_METHOD_LABELS) {
+    return normalized as ManualPaymentMethodCode;
+  }
+
+  throw badRequest('invalid_payment_method', 'Select a valid manual payment method.');
+};
+
+const resolveManualPaymentMethodId = async (
+  input: {
+    actorUserId: number;
+    clientAccountId: number;
+    paymentMethod: string;
+  },
+  executor: QueryExecutor
+) => {
+  const methodCode = normalizeManualPaymentMethodCode(input.paymentMethod);
+  const existing = firstRow(
+    await queryRows<PaymentMethodLookupRow>(
+      `SELECT id
+       FROM payment_methods
+       WHERE client_account_id = ?
+         AND provider_code = 'manual'
+         AND method_type_code = ?
+         AND method_status_code = 'active'
+         AND archived_at IS NULL
+       ORDER BY is_default DESC, id ASC
+       LIMIT 1`,
+      [input.clientAccountId, methodCode],
+      executor
+    )
+  );
+
+  if (existing) {
+    return existing.id;
+  }
+
+  const result = await executeStatement(
+    `INSERT INTO payment_methods (
+       public_id,
+       client_account_id,
+       added_by_user_id,
+       provider_code,
+       method_type_code,
+       provider_customer_ref,
+       provider_method_ref,
+       display_label,
+       brand_last4,
+       expiry_month,
+       expiry_year,
+       upi_id,
+       is_default,
+       method_status_code,
+       created_at,
+       updated_at,
+       archived_at
+     ) VALUES (
+       ?, ?, ?, 'manual', ?, NULL, ?, ?, NULL, NULL, NULL, NULL, 0, 'active',
+       UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), NULL
+     )`,
+    [
+      createPublicId(),
+      input.clientAccountId,
+      input.actorUserId,
+      methodCode,
+      methodCode,
+      MANUAL_PAYMENT_METHOD_LABELS[methodCode],
+    ],
+    executor
+  );
+
+  return result.insertId;
+};
 
 const allocateInvoiceNumber = async (connection: QueryExecutor) => {
   const year = new Date().getUTCFullYear();
@@ -933,6 +1027,14 @@ export const recordManualPayment = async (
     const paymentPublicId = createPublicId();
     const capturedAt = `${payload.paymentDate} ${new Date().toISOString().slice(11, 19)}`;
     const referenceNumber = providedReference || `MANUAL-${paymentPublicId.slice(-10)}`;
+    const manualPaymentMethodId = await resolveManualPaymentMethodId(
+      {
+        actorUserId: actor.userId,
+        clientAccountId: invoice.clientAccountId,
+        paymentMethod: payload.paymentMethod,
+      },
+      connection
+    );
 
     const paymentResult = await executeStatement(
       `INSERT INTO payment_transactions (
@@ -956,13 +1058,13 @@ export const recordManualPayment = async (
          created_at,
          updated_at
        ) VALUES (
-         ?, ?, NULL, ?, NULL, ?, 'captured', ?, ?, 0, ?, NULL,
+         ?, ?, ?, 'manual', NULL, ?, 'captured', ?, ?, 0, ?, NULL,
          ?, ?, ?, NULL, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
        )`,
       [
         paymentPublicId,
         invoice.clientAccountId,
-        payload.paymentMethod,
+        manualPaymentMethodId,
         referenceNumber,
         invoice.currencyCode || 'USD',
         paymentAmount.decimal,
@@ -1191,43 +1293,65 @@ export const createRefund = async (
   }
 ) => {
   return withTransaction(async (connection) => {
-    const payment = await resolvePaymentByPublicId(payload.paymentId, connection);
+    const payment = firstRow(
+      await queryRows<PaymentSummaryRow>(
+        `SELECT
+           pt.id,
+           pt.client_account_id AS clientAccountId,
+           pt.currency_code AS currencyCode,
+           pt.gross_amount AS grossAmount,
+           pt.status_code AS statusCode
+         FROM payment_transactions pt
+         WHERE pt.public_id = ?
+         LIMIT 1
+         FOR UPDATE`,
+        [payload.paymentId],
+        connection
+      )
+    );
+
+    if (!payment) {
+      throw notFound('payment_not_found', 'Payment not found.');
+    }
+
+    const paymentInvoiceSummary = firstRow(
+      await queryRows<PaymentInvoiceSummaryRow>(
+        `SELECT
+           MAX(pa.invoice_id) AS invoiceId,
+           MAX(inv.matter_id) AS matterId
+         FROM payment_allocations pa
+         LEFT JOIN invoices inv ON inv.id = pa.invoice_id
+         WHERE pa.payment_transaction_id = ?`,
+        [payment.id],
+        connection
+      )
+    );
+
     const invoice = payload.invoiceId
       ? await resolveInvoiceByPublicId(payload.invoiceId, connection)
-      : payment.invoiceId
-        ? { id: payment.invoiceId }
+      : paymentInvoiceSummary?.invoiceId
+        ? { id: paymentInvoiceSummary.invoiceId }
         : null;
 
-    const paymentSummaryRows = await queryRows<PaymentSummaryRow>(
+    const refundedTotalRows = await queryRows<PaymentRefundedTotalRow>(
       `SELECT
-         pt.client_account_id AS clientAccountId,
-         pt.currency_code AS currencyCode,
-         pt.gross_amount AS grossAmount,
-         pt.status_code AS statusCode,
-         MAX(pa.invoice_id) AS invoiceId,
-         MAX(inv.matter_id) AS matterId,
          COALESCE(SUM(rf.amount), 0) AS refundedAmount
-       FROM payment_transactions pt
-       LEFT JOIN payment_allocations pa ON pa.payment_transaction_id = pt.id
-       LEFT JOIN invoices inv ON inv.id = pa.invoice_id
-       LEFT JOIN refunds rf ON rf.payment_transaction_id = pt.id
-       WHERE pt.id = ?
-       GROUP BY pt.client_account_id, pt.currency_code, pt.gross_amount, pt.status_code`,
+       FROM refunds rf
+       WHERE rf.payment_transaction_id = ?`,
       [payment.id],
       connection
     );
 
-    const paymentSummary = paymentSummaryRows[0];
+    const refundAmount = normalizeMoney(payload.amount);
+    const refundedAmount = refundedTotalRows[0]?.refundedAmount ?? 0;
+    const grossMinor = toMinorUnits(payment.grossAmount);
+    const refundedMinor = toMinorUnits(refundedAmount);
+    const availableMinor = Math.max(grossMinor - refundedMinor, 0);
 
-    if (!paymentSummary) {
-      throw badRequest('payment_not_refundable', 'Payment summary could not be resolved.');
-    }
-
-    const availableAmount = Math.max(paymentSummary.grossAmount - paymentSummary.refundedAmount, 0);
-    if (payload.amount > availableAmount) {
+    if (refundAmount.minorUnits > availableMinor) {
       throw badRequest(
         'refund_amount_exceeds_available',
-        `Refund exceeds the remaining refundable amount of ${availableAmount}.`
+        `Refund exceeds the remaining refundable amount of ${minorToDecimal(availableMinor)}.`
       );
     }
 
@@ -1254,7 +1378,7 @@ export const createRefund = async (
         createPublicId(),
         payment.id,
         invoice?.id || null,
-        payload.amount,
+        refundAmount.decimal,
         payload.reasonText,
         actor.userId,
         actor.userId,
@@ -1262,9 +1386,9 @@ export const createRefund = async (
       connection
     );
 
-    const totalRefunded = paymentSummary.refundedAmount + payload.amount;
+    const totalRefundedMinor = refundedMinor + refundAmount.minorUnits;
     const nextPaymentStatus =
-      totalRefunded >= paymentSummary.grossAmount ? 'refunded' : 'partially-refunded';
+      totalRefundedMinor >= grossMinor ? 'refunded' : 'partially-refunded';
 
     await executeStatement(
       `UPDATE payment_transactions
@@ -1285,13 +1409,13 @@ export const createRefund = async (
              updated_at = UTC_TIMESTAMP(6),
              row_version = row_version + 1
          WHERE id = ?`,
-        [payload.amount, payload.amount, invoice.id],
+        [refundAmount.decimal, refundAmount.decimal, invoice.id],
         connection
       );
     }
 
-    if (paymentSummary.matterId) {
-      await touchMatterActivity(paymentSummary.matterId, connection);
+    if (paymentInvoiceSummary?.matterId) {
+      await touchMatterActivity(paymentInvoiceSummary.matterId, connection);
     }
 
     await createAuditEvent(
@@ -1301,24 +1425,24 @@ export const createRefund = async (
         actorRoleCode: actor.roleCodes[0] || 'billing_admin',
         actorUserId: actor.userId,
         changes: [
-          { fieldName: 'amount', newValue: payload.amount },
+          { fieldName: 'amount', newValue: Number(refundAmount.decimal) },
           { fieldName: 'reason_text', newValue: payload.reasonText },
-          { fieldName: 'payment_status', oldValue: paymentSummary.statusCode, newValue: nextPaymentStatus },
+          { fieldName: 'payment_status', oldValue: payment.statusCode, newValue: nextPaymentStatus },
         ],
         entityPk: refundResult.insertId,
         entityTableName: 'refunds',
         sourceModule: 'billing_workspace',
-        summaryNewValue: `Refunded ${payload.amount}`,
+        summaryNewValue: `Refunded ${refundAmount.decimal}`,
       },
       connection
     );
 
     await createClientNotifications(
       {
-        bodyText: `A refund of ${formatInvoiceMoney(payload.amount, paymentSummary.currencyCode || 'USD')} has been initiated against your payment.`,
-        clientAccountId: paymentSummary.clientAccountId,
+        bodyText: `A refund of ${formatInvoiceMoney(Number(refundAmount.decimal), payment.currencyCode || 'USD')} has been initiated against your payment.`,
+        clientAccountId: payment.clientAccountId,
         invoiceId: invoice?.id || null,
-        matterId: paymentSummary.matterId || null,
+        matterId: paymentInvoiceSummary?.matterId || null,
         notificationTypeCode: 'payment_reminder',
         priorityCode: 'normal',
         title: 'Refund issued',

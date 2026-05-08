@@ -30,6 +30,85 @@ Run these before browser testing:
 5. Run the scripted read-path smoke pass once the stack is up.
    - `node scripts/phase10-smoke.mjs`
 
+## Staging Playwright E2E Runner
+
+Use `scripts/run-e2e-staging.mjs` to start all four local/staging app
+processes, wait for readiness, run Playwright, and tear down the processes
+afterward. The runner is intended for disposable staging data only.
+
+Create a local `.env.e2e.staging` file at the repo root. This file is ignored
+by git and must never be committed.
+
+Required variables:
+
+```env
+E2E_RUN_MUTATIONS=false
+E2E_CLIENT_WEB_BASE=http://127.0.0.1:5173
+E2E_ADMIN_WEB_BASE=http://127.0.0.1:5174
+E2E_CLIENT_API_BASE=http://127.0.0.1:3001/api/v1
+E2E_ADMIN_API_BASE=http://127.0.0.1:3005/api/v1/admin
+E2E_ADMIN_EMAIL=<disposable-admin-email>
+E2E_ADMIN_PASSWORD=<disposable-admin-password>
+E2E_CLIENT_EMAIL=<disposable-client-email>
+E2E_CLIENT_PASSWORD=<disposable-client-password>
+E2E_ALLOW_PRODUCTION_TARGET=false
+```
+
+If the component `.env` files are not already configured, also provide the
+required app/database env in `.env.e2e.staging`, for example:
+
+```env
+APP_ENV=development
+MYSQL_HOST=<staging-or-local-mysql-host>
+MYSQL_PORT=3306
+MYSQL_DATABASE=<disposable-test-database>
+MYSQL_USER=<database-user>
+MYSQL_PASSWORD=<database-password>
+MYSQL_SSL_MODE=DISABLED
+DOCUMENT_STORAGE_DRIVER=local
+DOCUMENT_STORAGE_ROOT=var/uploads
+EMAIL_PROVIDER_MODE=disabled
+SMS_PROVIDER_MODE=disabled
+GOOGLE_AUTH_MODE=disabled
+CALENDAR_SYNC_MODE=disabled
+FILE_SCAN_MODE=disabled
+```
+
+Run:
+
+```bash
+node scripts/run-e2e-staging.mjs
+```
+
+Safety notes:
+
+- Use disposable admin/client credentials only.
+- Keep `E2E_RUN_MUTATIONS=false` for read-only auth checks.
+- Use `E2E_RUN_MUTATIONS=true` only against disposable staging databases.
+- Do not run mutation tests against production.
+- If any target URL looks production-like, the runner refuses to continue
+  unless `E2E_ALLOW_PRODUCTION_TARGET=true` is set explicitly.
+- The runner sets `E2E_RUN_LIVE=true` for Playwright automatically.
+
+Readiness checks:
+
+- Client API: `${E2E_CLIENT_API_BASE}/health/ready`
+- Admin API: `${E2E_ADMIN_API_BASE}/health/ready`
+- Client frontend: `${E2E_CLIENT_WEB_BASE}`
+- Admin frontend: `${E2E_ADMIN_WEB_BASE}/login`
+
+Troubleshooting:
+
+- Port already in use: stop the existing process or change the matching base URL
+  port in `.env.e2e.staging`.
+- Health endpoint timeout: confirm MySQL is reachable and migrations have run.
+- Invalid credentials: recreate/reset the disposable smoke identities and update
+  only the ignored env file.
+- Secure-cookie issues on HTTP local staging: use `APP_ENV=development` for local
+  HTTP rehearsal, or test over HTTPS when using production-like cookie settings.
+- DB/migration readiness: run backend migrations before the E2E runner, then
+  confirm both `/health/ready` endpoints return `200`.
+
 ## Known Blockers
 
 ### Blocker 1: Client backend bootstrap depends on live MySQL reachability

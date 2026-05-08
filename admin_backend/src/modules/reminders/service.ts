@@ -60,6 +60,14 @@ type ReminderDeliverySettingRow = RowDataPacket & {
   templateId: string | null;
 };
 
+type MarkReminderFailedInput = {
+  actor?: AdminActor | null;
+  error: unknown;
+  lockId: string;
+  providerResult?: ProviderDeliveryResult;
+  reminderId: number;
+};
+
 const LOCK_TTL_MINUTES = 15;
 const RETRY_DELAY_MINUTES = 10;
 
@@ -378,35 +386,13 @@ const completeLockedReminder = async (
 
     if (providerResult.status === 'failed') {
       const message = providerResult.errorMessage || 'Reminder provider delivery failed.';
-      await executeStatement(
-        `UPDATE event_reminders
-         SET delivery_status_code = 'failed',
-             failure_reason = ?,
-             next_attempt_at = CASE
-               WHEN retry_count < max_attempts THEN DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ${RETRY_DELAY_MINUTES} MINUTE)
-               ELSE NULL
-             END,
-             locked_at = NULL,
-             locked_by = NULL,
-             processed_at = UTC_TIMESTAMP(6)
-         WHERE id = ?`,
-        [message, row.id],
-        connection
-      );
-
-      await auditReminder(
+      await markReminderFailedInCurrentTransaction(
         {
-          actionCode: 'reminder.failed',
-          actionLabel: 'Reminder delivery failed',
           actor,
-          changes: [
-            { fieldName: 'delivery_status_code', oldValue: 'processing', newValue: 'failed' },
-            { fieldName: 'delivery_mode', newValue: deliveryLabelFor(row.channelCode, providerResult) },
-            { fieldName: 'provider_code', newValue: providerResult.providerCode },
-            { fieldName: 'last_error', newValue: message },
-          ],
-          eventId: row.eventId,
-          summaryNewValue: message,
+          error: new Error(message),
+          lockId,
+          providerResult,
+          reminderId: row.id,
         },
         connection
       );
@@ -463,13 +449,10 @@ const completeLockedReminder = async (
     };
   });
 
-const markReminderFailed = async (
-  reminderId: number,
-  lockId: string,
-  error: unknown,
-  actor?: AdminActor | null
-) =>
-  withTransaction(async (connection) => {
+const markReminderFailedInCurrentTransaction = async (
+  input: MarkReminderFailedInput,
+  connection: QueryExecutor
+) => {
     const rows = await queryRows<ReminderProcessingRow>(
       `SELECT
          er.id,
@@ -500,7 +483,7 @@ const markReminderFailed = async (
        WHERE er.id = ?
          AND er.locked_by = ?
        LIMIT 1`,
-      [reminderId, lockId],
+      [input.reminderId, input.lockId],
       connection
     );
     const row = rows[0];
@@ -509,15 +492,17 @@ const markReminderFailed = async (
       return;
     }
 
-    const message = safeErrorMessage(error);
+    const message = safeErrorMessage(input.error);
+    const nextRetryCount = Number(row.retryCount || 0) + 1;
     await executeStatement(
       `UPDATE event_reminders
        SET delivery_status_code = 'failed',
            failure_reason = ?,
            next_attempt_at = CASE
-             WHEN retry_count < max_attempts THEN DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ${RETRY_DELAY_MINUTES} MINUTE)
+             WHEN retry_count + 1 < max_attempts THEN DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ${RETRY_DELAY_MINUTES} MINUTE)
              ELSE NULL
            END,
+           retry_count = retry_count + 1,
            locked_at = NULL,
            locked_by = NULL,
            processed_at = UTC_TIMESTAMP(6)
@@ -529,10 +514,24 @@ const markReminderFailed = async (
     await auditReminder(
       {
         actionCode: 'reminder.failed',
-        actionLabel: 'Reminder processing failed',
-        actor,
+        actionLabel: input.providerResult ? 'Reminder delivery failed' : 'Reminder processing failed',
+        actor: input.actor,
         changes: [
           { fieldName: 'delivery_status_code', oldValue: 'processing', newValue: 'failed' },
+          ...(input.providerResult
+            ? [
+                {
+                  fieldName: 'delivery_mode',
+                  newValue: deliveryLabelFor(row.channelCode, input.providerResult),
+                },
+                { fieldName: 'provider_code', newValue: input.providerResult.providerCode },
+                {
+                  fieldName: 'provider_reference',
+                  newValue: input.providerResult.providerReference || null,
+                },
+              ]
+            : []),
+          { fieldName: 'retry_count', oldValue: Number(row.retryCount || 0), newValue: nextRetryCount },
           { fieldName: 'last_error', newValue: message },
         ],
         eventId: row.eventId,
@@ -540,6 +539,16 @@ const markReminderFailed = async (
       },
       connection
     );
+  };
+
+const markReminderFailed = async (
+  reminderId: number,
+  lockId: string,
+  error: unknown,
+  actor?: AdminActor | null
+) =>
+  withTransaction(async (connection) => {
+    await markReminderFailedInCurrentTransaction({ actor, error, lockId, reminderId }, connection);
   });
 
 const lockDueReminders = async (limit?: number) => {
@@ -553,8 +562,7 @@ const lockDueReminders = async (limit?: number) => {
            locked_at = UTC_TIMESTAMP(6),
            locked_by = ?,
            failure_reason = NULL,
-           next_attempt_at = NULL,
-           retry_count = retry_count + 1
+           next_attempt_at = NULL
        WHERE id IN (
          SELECT due.id
          FROM (
@@ -783,7 +791,6 @@ export const retryReminder = async (actor: AdminActor, reminderId: number) => {
        SET delivery_status_code = 'processing',
            locked_at = UTC_TIMESTAMP(6),
            locked_by = ?,
-           retry_count = retry_count + 1,
            max_attempts = GREATEST(max_attempts, retry_count + 1),
            next_attempt_at = NULL,
            failure_reason = NULL
@@ -799,7 +806,6 @@ export const retryReminder = async (actor: AdminActor, reminderId: number) => {
         actor,
         changes: [
           { fieldName: 'delivery_status_code', oldValue: row.deliveryStatusCode, newValue: 'processing' },
-          { fieldName: 'retry_count', oldValue: Number(row.retryCount || 0), newValue: Number(row.retryCount || 0) + 1 },
         ],
         eventId: Number(row.eventId),
         sourceModule: 'admin_notifications',

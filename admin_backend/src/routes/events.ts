@@ -2,6 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, badRequest } from '../lib/httpErrors.js';
 import { cancelEvent, createEvent, getWorkspace, retryEventCalendarSync, updateEvent } from '../modules/events/service.js';
+import {
+  isAllowedPlatformTimezone,
+  PLATFORM_TIMEZONE_PATTERN,
+} from '../modules/settings/platformSettings.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const eventsRouter = Router();
@@ -15,6 +19,14 @@ const optionalUrl = z.preprocess((value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().url().optional());
 
+const timezoneSchema = z
+  .string()
+  .regex(PLATFORM_TIMEZONE_PATTERN)
+  .refine(isAllowedPlatformTimezone, {
+    message: 'Timezone must be one of the supported platform timezones.',
+  })
+  .optional();
+
 const createEventSchema = z.object({
   clientAccountId: z.string().trim().min(2).optional(),
   date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -24,6 +36,7 @@ const createEventSchema = z.object({
   mode: z.string().trim().min(2).max(32),
   notes: z.string().trim().max(4000).optional(),
   time: z.string().trim().regex(/^\d{2}:\d{2}$/),
+  timezone: timezoneSchema,
   title: z.string().trim().min(2).max(255),
   type: z.string().trim().min(2).max(32),
   visibleToClient: z.boolean().optional(),
@@ -38,6 +51,7 @@ const updateEventSchema = z.object({
   mode: z.string().trim().min(2).max(32).optional(),
   notes: z.string().trim().max(4000).nullable().optional(),
   time: z.string().trim().regex(/^\d{2}:\d{2}$/).optional(),
+  timezone: timezoneSchema,
   title: z.string().trim().min(2).max(255).optional(),
   type: z.string().trim().min(2).max(32).optional(),
   visibleToClient: z.boolean().optional(),

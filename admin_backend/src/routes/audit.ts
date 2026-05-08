@@ -8,7 +8,7 @@ export const auditRouter = Router();
 auditRouter.get(
   '/audit',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'matter.view');
+    await requireReadPermission(request, 'audit.view');
     response.json(
       await listEntries({
         limit: Number(request.query.limit || 50),

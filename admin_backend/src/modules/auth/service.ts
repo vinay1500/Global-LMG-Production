@@ -663,8 +663,14 @@ export const signIn = async (
 };
 
 export const signOut = async (request: Request, response: Response) => {
+  await consumeAuthRateLimits([
+    {
+      key: `signout:ip:${getRequestIpAddress(request)}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_IP_MAX_ATTEMPTS,
+    },
+  ]);
+
   const rawSessionToken = getSessionToken(request);
-  const csrfToken = getCsrfToken(request);
 
   if (!rawSessionToken) {
     clearSessionCookies(response);
@@ -678,15 +684,7 @@ export const signOut = async (request: Request, response: Response) => {
     return { status: 'signed_out' as const };
   }
 
-  if (!csrfToken || hashOpaqueValue(csrfToken, env.AUTH_SESSION_SECRET) !== resolution.csrfHash) {
-    recordSecurityEventSafely({
-      eventTypeCode: 'admin.csrf_mismatch',
-      success: false,
-      userId: resolution.actor.userId,
-    });
-    throw forbidden('csrf_mismatch', 'CSRF validation failed.');
-  }
-
+  // Logout is session termination; OWASP treats it as a user safety control, so stale CSRF state must not block the bound session holder.
   await queryRows(`UPDATE user_sessions SET revoked_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6) WHERE id = ?`, [
     resolution.sessionId,
   ]);

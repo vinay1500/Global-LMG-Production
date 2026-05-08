@@ -17,9 +17,11 @@ For local development where the Node backends run on the host and ClamAV runs in
 FILE_SCAN_MODE=clamav
 CLAMAV_HOST=127.0.0.1
 CLAMAV_PORT=3310
+FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN=true
 FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN=true
-FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN=false
 ```
+
+In `APP_ENV=development`, these block flags remain env-configurable for local troubleshooting. In every non-development environment, both preview and download blocking are forced on at runtime even if an env file accidentally sets either value to `false`.
 
 ## Hosting Setup
 
@@ -29,8 +31,8 @@ If the backend and ClamAV run inside the same Docker Compose network, use the se
 FILE_SCAN_MODE=clamav
 CLAMAV_HOST=clamav
 CLAMAV_PORT=3310
+FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN=true
 FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN=true
-FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN=false
 ```
 
 Deploy `docker-compose.clamav.yml` beside the backend service or merge its `clamav` service into the hosting compose file. Keep the `clamav-db` volume so virus definitions survive container restarts.

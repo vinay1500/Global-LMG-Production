@@ -8,7 +8,7 @@ export const notificationsRouter = Router();
 notificationsRouter.get(
   '/notifications',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'matter.view');
+    await requireReadPermission(request, 'notification.view');
     response.json(
       await listNotifications({
         limit: Number(request.query.limit || 50),
@@ -21,15 +21,15 @@ notificationsRouter.get(
 notificationsRouter.post(
   '/notifications/:notificationId/read',
   asyncHandler(async (request, response) => {
-    await requireMutationPermission(request, 'matter.view');
-    response.json(await markRead(String(request.params.notificationId || '')));
+    const actor = await requireMutationPermission(request, 'notification.view');
+    response.json(await markRead(actor, String(request.params.notificationId || '')));
   })
 );
 
 notificationsRouter.post(
   '/notifications/:notificationId/dismiss',
   asyncHandler(async (request, response) => {
-    await requireMutationPermission(request, 'matter.view');
-    response.json(await dismiss(String(request.params.notificationId || '')));
+    const actor = await requireMutationPermission(request, 'notification.view');
+    response.json(await dismiss(actor, String(request.params.notificationId || '')));
   })
 );

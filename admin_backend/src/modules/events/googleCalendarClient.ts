@@ -93,22 +93,43 @@ const safeGoogleErrorMessage = async (response: Response) => {
   }
 };
 
-const createJwtAssertion = (impersonatedEmail: string) => {
-  const privateKey = env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_PRIVATE_KEY;
-  const serviceAccountEmail = env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_EMAIL;
+type CreateJwtAssertionInput =
+  | string
+  | {
+      audience?: string;
+      impersonatedEmail: string;
+      nowSeconds?: number;
+      privateKey?: string;
+      scope?: string;
+      serviceAccountEmail?: string;
+    };
+
+export const createJwtAssertion = (input: CreateJwtAssertionInput) => {
+  const impersonatedEmail = typeof input === 'string' ? input : input.impersonatedEmail;
+  const privateKey =
+    typeof input === 'string'
+      ? env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_PRIVATE_KEY
+      : input.privateKey ?? env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_PRIVATE_KEY;
+  const serviceAccountEmail =
+    typeof input === 'string'
+      ? env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_EMAIL
+      : input.serviceAccountEmail ?? env.GOOGLE_CALENDAR_SERVICE_ACCOUNT_EMAIL;
 
   if (!privateKey || !serviceAccountEmail) {
     throw new GoogleCalendarError('Google Calendar service account credentials are not configured.');
   }
 
-  const now = Math.floor(Date.now() / 1000);
+  const now =
+    typeof input === 'string'
+      ? Math.floor(Date.now() / 1000)
+      : input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const header = base64UrlJson({ alg: 'RS256', typ: 'JWT' });
   const payload = base64UrlJson({
-    aud: GOOGLE_TOKEN_URL,
+    aud: typeof input === 'string' ? GOOGLE_TOKEN_URL : input.audience ?? GOOGLE_TOKEN_URL,
     exp: now + 3600,
     iat: now,
     iss: serviceAccountEmail,
-    scope: GOOGLE_CALENDAR_SCOPE,
+    scope: typeof input === 'string' ? GOOGLE_CALENDAR_SCOPE : input.scope ?? GOOGLE_CALENDAR_SCOPE,
     sub: impersonatedEmail,
   });
   const unsigned = `${header}.${payload}`;
@@ -194,12 +215,16 @@ type GoogleEventResponse = {
   id?: string;
 };
 
-const isOrganizerAllowed = (email: string) => {
-  if (!env.GOOGLE_CALENDAR_IMPERSONATE_DOMAIN) {
+export const isGoogleCalendarImpersonatedEmailAllowed = (
+  email: string,
+  allowedDomain = env.GOOGLE_CALENDAR_IMPERSONATE_DOMAIN,
+) => {
+  const normalizedDomain = allowedDomain?.trim().toLowerCase();
+  if (!normalizedDomain) {
     return true;
   }
 
-  return email.toLowerCase().endsWith(`@${env.GOOGLE_CALENDAR_IMPERSONATE_DOMAIN.toLowerCase()}`);
+  return email.trim().toLowerCase().endsWith(`@${normalizedDomain}`);
 };
 
 const getCalendarOwnerEmail = (event: GoogleCalendarEvent) => {
@@ -209,7 +234,7 @@ const getCalendarOwnerEmail = (event: GoogleCalendarEvent) => {
     throw new GoogleCalendarError('Calendar organizer email is missing.');
   }
 
-  if (!isOrganizerAllowed(email)) {
+  if (!isGoogleCalendarImpersonatedEmailAllowed(email)) {
     throw new GoogleCalendarError('Calendar organizer email is outside the allowed Google Workspace domain.');
   }
 

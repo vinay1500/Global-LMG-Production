@@ -7,6 +7,17 @@ import { ensurePhase5SchemaReadiness } from './lib/schemaReadiness.js';
 const start = async () => {
   await ensurePhase5SchemaReadiness();
 
+  logEvent(
+    'info',
+    `Malware scan: ${env.FILE_SCAN_MODE}; block-until-clean: download=${env.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN} preview=${env.FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN}`,
+    {
+      blockDownloadUntilClean: env.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN,
+      blockPreviewUntilClean: env.FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN,
+      forcedByNonDevelopment: env.APP_ENV !== 'development',
+      scanMode: env.FILE_SCAN_MODE,
+    }
+  );
+
   const app = createApp();
   const server = app.listen(env.PORT, () => {
     logEvent('info', 'server.started', { port: env.PORT });

@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { AppError, badRequest, notFound } from '../../lib/httpErrors.js';
-import { executeStatement, queryRows } from '../../lib/mysql.js';
+import { executeStatement, queryRows, type QueryExecutor } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
 import { createAuditEvent } from '../writeSupport.js';
 
@@ -47,6 +47,21 @@ type SettingRule = {
   type: PlatformSettingValueType;
 };
 
+export const PLATFORM_TIMEZONE_OPTIONS = [
+  'Asia/Kolkata',
+  'UTC',
+  'Europe/London',
+  'America/New_York',
+  'Asia/Dubai',
+  'Asia/Singapore',
+] as const;
+
+export const PLATFORM_TIMEZONE_PATTERN =
+  /^(UTC|[A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)$/;
+
+export const isAllowedPlatformTimezone = (value: string) =>
+  (PLATFORM_TIMEZONE_OPTIONS as readonly string[]).includes(value);
+
 const SETTING_RULES: Record<string, SettingRule> = {
   'platform.default_currency': {
     options: ['USD'],
@@ -58,8 +73,8 @@ const SETTING_RULES: Record<string, SettingRule> = {
     type: 'select',
   },
   'platform.default_timezone': {
-    options: ['Asia/Kolkata', 'UTC', 'Europe/London', 'America/New_York', 'Asia/Dubai', 'Asia/Singapore'],
-    pattern: /^(UTC|[A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)$/,
+    options: Array.from(PLATFORM_TIMEZONE_OPTIONS),
+    pattern: PLATFORM_TIMEZONE_PATTERN,
     type: 'select',
   },
   'platform.display_name': { maxLength: 120, type: 'string' },
@@ -98,6 +113,20 @@ const decodeSettingValue = (rawValue: unknown): PlatformSettingValue => {
   }
 
   return JSON.stringify(value);
+};
+
+export const getPlatformDefaultTimezone = async (executor?: QueryExecutor) => {
+  const rows = await queryRows<Pick<PlatformSettingRow, 'settingValueJson'> & RowDataPacket>(
+    `SELECT setting_value_json AS settingValueJson
+     FROM platform_settings
+     WHERE setting_key = 'platform.default_timezone'
+     LIMIT 1`,
+    [],
+    executor
+  );
+  const value = rows[0] ? decodeSettingValue(rows[0].settingValueJson) : null;
+
+  return typeof value === 'string' && isAllowedPlatformTimezone(value) ? value : 'UTC';
 };
 
 const mapRow = (row: PlatformSettingRow): PlatformSetting => {

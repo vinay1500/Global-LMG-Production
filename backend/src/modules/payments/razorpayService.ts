@@ -159,11 +159,16 @@ const assertProviderEnabled = () => {
   }
 };
 
-const createSignature = (message: string, secret: string) =>
+const HMAC_SHA256_HEX_LENGTH = 64;
+
+export const createSignature = (message: string, secret: string) =>
   crypto.createHmac('sha256', secret).update(message).digest('hex');
 
+const isValidSha256HexSignature = (value: string) =>
+  value.length === HMAC_SHA256_HEX_LENGTH && /^[a-f0-9]+$/i.test(value);
+
 const timingSafeEqualHex = (left: string, right: string) => {
-  if (!/^[a-f0-9]+$/i.test(left) || !/^[a-f0-9]+$/i.test(right)) {
+  if (!isValidSha256HexSignature(left) || !isValidSha256HexSignature(right)) {
     return false;
   }
 
@@ -172,6 +177,12 @@ const timingSafeEqualHex = (left: string, right: string) => {
 
   return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 };
+
+export const verifyRazorpaySignature = (input: {
+  message: string;
+  secret: string;
+  signature: string;
+}) => timingSafeEqualHex(createSignature(input.message, input.secret), input.signature);
 
 const hashValue = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -1080,12 +1091,13 @@ export const verifyInvoicePayment = async (
 ): Promise<InvoicePaymentVerifyResponse> => {
   assertProviderEnabled();
 
-  const expectedSignature = createSignature(
-    `${input.razorpayOrderId}|${input.razorpayPaymentId}`,
-    env.RAZORPAY_KEY_SECRET || ''
-  );
-
-  if (!timingSafeEqualHex(expectedSignature, input.razorpaySignature)) {
+  if (
+    !verifyRazorpaySignature({
+      message: `${input.razorpayOrderId}|${input.razorpayPaymentId}`,
+      secret: env.RAZORPAY_KEY_SECRET || '',
+      signature: input.razorpaySignature,
+    })
+  ) {
     await withTransaction(getMysqlPool(), async (connection) => {
       await insertAuditEvent(connection, {
         actionCode: 'payment.gateway_failed',
@@ -1280,8 +1292,14 @@ export const handleRazorpayWebhook = async (
   const order = payload.payload?.order?.entity;
   const providerEventId = getWebhookEventId({ eventId: input.eventId }, payload, input.rawBody);
   const eventType = payload.event || 'unknown';
-  const expectedSignature = createSignature(input.rawBody.toString('utf8'), env.RAZORPAY_WEBHOOK_SECRET);
-  const signatureValid = Boolean(input.signature && timingSafeEqualHex(expectedSignature, input.signature));
+  const signatureValid = Boolean(
+    input.signature &&
+      verifyRazorpaySignature({
+        message: input.rawBody.toString('utf8'),
+        secret: env.RAZORPAY_WEBHOOK_SECRET,
+        signature: input.signature,
+      })
+  );
 
   if (!signatureValid) {
     await withTransaction(getMysqlPool(), async (connection) => {

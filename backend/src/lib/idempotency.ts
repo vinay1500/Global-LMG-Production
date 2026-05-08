@@ -10,6 +10,7 @@ const POLL_INTERVAL_MS = 100;
 const MAX_RESERVATION_RETRIES = 4;
 
 type IdempotencyRow = RowDataPacket & {
+  lockExpired: 0 | 1;
   request_fingerprint_hash: string;
   response_body_json: unknown;
   response_status_code: number | null;
@@ -118,7 +119,15 @@ const waitForReplay = async <TBody>(
 
   while (Date.now() < deadline) {
     const [rows] = await pool.query<IdempotencyRow[]>(
-      `SELECT status_code, request_fingerprint_hash, response_status_code, response_body_json
+      `SELECT
+         status_code,
+         request_fingerprint_hash,
+         response_status_code,
+         response_body_json,
+         CASE
+           WHEN locked_until IS NULL OR locked_until <= UTC_TIMESTAMP(6) THEN 1
+           ELSE 0
+         END AS lockExpired
        FROM idempotency_keys
        WHERE scope_code = ? AND idempotency_key_hash = ?
        LIMIT 1`,
@@ -199,7 +208,15 @@ const reserveOrReplayOnce = async <TBody>(
 
     const isNewReservation = insertResult.affectedRows === 1;
     const [rows] = await connection.query<IdempotencyRow[]>(
-      `SELECT status_code, request_fingerprint_hash, response_status_code, response_body_json
+      `SELECT
+         status_code,
+         request_fingerprint_hash,
+         response_status_code,
+         response_body_json,
+         CASE
+           WHEN locked_until IS NULL OR locked_until <= UTC_TIMESTAMP(6) THEN 1
+           ELSE 0
+         END AS lockExpired
        FROM idempotency_keys
        WHERE scope_code = ? AND idempotency_key_hash = ?
        LIMIT 1
@@ -237,6 +254,32 @@ const reserveOrReplayOnce = async <TBody>(
       throw conflict(
         'idempotency_request_failed',
         'The original request for this Idempotency-Key failed and was not replayed.'
+      );
+    }
+
+    if (row.status_code === 'processing' && row.lockExpired) {
+      const [claimResult] = await connection.execute<ResultSetHeader>(
+        `UPDATE idempotency_keys
+         SET locked_until = DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 30 SECOND),
+             updated_at = UTC_TIMESTAMP(6)
+         WHERE scope_code = ?
+           AND idempotency_key_hash = ?
+           AND status_code = 'processing'
+           AND (locked_until IS NULL OR locked_until <= UTC_TIMESTAMP(6))`,
+        [options.scope, options.idempotencyKeyHash]
+      );
+
+      await connection.commit();
+      transactionOpen = false;
+
+      if (claimResult.affectedRows === 1) {
+        return null;
+      }
+
+      return waitForReplay<TBody>(
+        options.scope,
+        options.idempotencyKeyHash,
+        options.requestFingerprintHash
       );
     }
 

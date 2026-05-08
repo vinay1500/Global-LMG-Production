@@ -36,17 +36,60 @@ const createMatterNoteSchema = z.object({
   visibleToClient: z.boolean().optional(),
 });
 
-const assignmentSchema = z.object({
-  assignmentRoleCode: z.string().trim().min(2).max(64),
-  counselPartnerId: z.string().trim().min(2).max(64).optional(),
-  feeAgreedAmount: z.number().nonnegative().optional(),
-  feeDueAmount: z.number().nonnegative().optional(),
-  feePaidAmount: z.number().nonnegative().optional(),
-  internalUserId: z.string().trim().min(2).max(64).optional(),
-  isPrimary: z.boolean().optional(),
-  notes: z.string().trim().max(2000).optional(),
-  visibleToClient: z.boolean().optional(),
-});
+const FEE_TOLERANCE = 0.01;
+
+export const assignmentSchema = z
+  .object({
+    assignmentRoleCode: z.string().trim().min(2).max(64),
+    counselPartnerId: z.string().trim().min(2).max(64).optional(),
+    feeAgreedAmount: z.number().nonnegative().optional(),
+    feeDueAmount: z.number().nonnegative().optional(),
+    feePaidAmount: z.number().nonnegative().optional(),
+    internalUserId: z.string().trim().min(2).max(64).optional(),
+    isPrimary: z.boolean().optional(),
+    notes: z.string().trim().max(2000).optional(),
+    visibleToClient: z.boolean().optional(),
+  })
+  .superRefine((payload, context) => {
+    const agreed = payload.feeAgreedAmount;
+
+    if (typeof agreed !== 'number') {
+      return;
+    }
+
+    if (
+      typeof payload.feePaidAmount === 'number' &&
+      payload.feePaidAmount > agreed + FEE_TOLERANCE
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Paid amount cannot exceed agreed amount.',
+        path: ['feePaidAmount'],
+      });
+    }
+
+    if (
+      typeof payload.feeDueAmount === 'number' &&
+      payload.feeDueAmount > agreed + FEE_TOLERANCE
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Due amount cannot exceed agreed amount.',
+        path: ['feeDueAmount'],
+      });
+    }
+
+    const paid = payload.feePaidAmount ?? 0;
+    const due = payload.feeDueAmount ?? 0;
+
+    if (paid + due > agreed + FEE_TOLERANCE) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Paid plus due cannot exceed agreed amount.',
+        path: ['feeDueAmount'],
+      });
+    }
+  });
 
 const assignmentEntrySchema = z.object({
   id: z.string().trim().min(2).max(64),

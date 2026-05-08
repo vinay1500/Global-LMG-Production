@@ -20,6 +20,10 @@ import { executeStatement, queryRows, withTransaction, type QueryExecutor } from
 import { env } from '../../config/env.js';
 import type { RowDataPacket } from 'mysql2/promise';
 import { getActiveReminderSettings } from '../settings/notificationSettings.js';
+import {
+  getPlatformDefaultTimezone,
+  isAllowedPlatformTimezone,
+} from '../settings/platformSettings.js';
 import { isGoogleCalendarConfigured, syncGoogleCalendarEvent } from './googleCalendarClient.js';
 
 type EventStateRow = RowDataPacket & {
@@ -92,6 +96,21 @@ const subtractMinutesFromMysqlDateTime = (dateTime: string, minutes: number) => 
 
 const isFutureMysqlDateTime = (dateTime: string) =>
   new Date(`${dateTime.replace(' ', 'T')}`).getTime() > Date.now();
+
+const resolveEventTimezoneName = async (
+  timezone: string | undefined,
+  executor: QueryExecutor
+) => {
+  if (timezone) {
+    if (!isAllowedPlatformTimezone(timezone)) {
+      throw badRequest('invalid_timezone', 'Timezone must be one of the supported platform timezones.');
+    }
+
+    return timezone;
+  }
+
+  return getPlatformDefaultTimezone(executor);
+};
 
 const resolveEventByPublicId = async (eventPublicId: string, executor: QueryExecutor) => {
   const rows = await queryRows<EventStateRow>(
@@ -549,6 +568,7 @@ export const createEvent = async (
     mode: string;
     notes?: string;
     time: string;
+    timezone?: string;
     title: string;
     type: string;
     visibleToClient?: boolean;
@@ -575,6 +595,7 @@ export const createEvent = async (
       payload.time,
       Math.max(payload.durationMinutes || 60, 15)
     );
+    const timezoneName = await resolveEventTimezoneName(payload.timezone, connection);
     const visibleToClient = payload.visibleToClient !== false;
     const existingRows = await queryRows<ExistingEventRow>(
       `SELECT id, public_id AS publicId
@@ -583,10 +604,11 @@ export const createEvent = async (
          AND matter_id <=> ?
          AND title = ?
          AND scheduled_start_at = ?
+         AND timezone_name = ?
          AND cancelled_at IS NULL
        LIMIT 1
        FOR UPDATE`,
-      [clientAccount.id, matter?.id || null, payload.title, scheduledStartAt],
+      [clientAccount.id, matter?.id || null, payload.title, scheduledStartAt, timezoneName],
       connection
     );
 
@@ -618,7 +640,7 @@ export const createEvent = async (
          created_at,
          updated_at
        ) VALUES (
-         ?, ?, ?, ?, ?, 'upcoming', ?, ?, 'Asia/Kolkata', ?, ?, ?, NULL, ?, NULL, ?, ?, ?, NULL,
+         ?, ?, ?, ?, ?, 'upcoming', ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, NULL,
          UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
        )`,
       [
@@ -629,6 +651,7 @@ export const createEvent = async (
         payload.type,
         scheduledStartAt,
         scheduledEndAt,
+        timezoneName,
         payload.mode,
         payload.mode === 'video' ? 'Video Conference' : null,
         'manual',
@@ -663,6 +686,7 @@ export const createEvent = async (
           { fieldName: 'title', newValue: payload.title },
           { fieldName: 'type', newValue: payload.type },
           { fieldName: 'scheduled_start_at', newValue: scheduledStartAt },
+          { fieldName: 'timezone_name', newValue: timezoneName },
         ],
         entityPk: eventId,
         entityTableName: 'events',
@@ -715,6 +739,7 @@ export const updateEvent = async (
     mode?: string;
     notes?: string | null;
     time?: string;
+    timezone?: string;
     title?: string;
     type?: string;
     visibleToClient?: boolean;
@@ -746,6 +771,7 @@ export const updateEvent = async (
     const nextStartAt = toMysqlDateTime(nextDate, nextTime);
     const nextDuration = Math.max(payload.durationMinutes || event.durationMinutes || 60, 15);
     const nextEndAt = addMinutesToMysqlDateTime(nextStartAt, nextDuration);
+    const nextTimezoneName = await resolveEventTimezoneName(payload.timezone, connection);
     const nextMode = payload.mode || event.modeCode;
     const shouldClearJoinUrl = nextMode !== 'video';
     const hasMeetLinkPatch = Object.prototype.hasOwnProperty.call(payload, 'meetLink');
@@ -767,6 +793,7 @@ export const updateEvent = async (
            event_type_code = ?,
            scheduled_start_at = ?,
            scheduled_end_at = ?,
+           timezone_name = ?,
            mode_code = ?,
            location_text = ?,
            join_url = ?,
@@ -783,6 +810,7 @@ export const updateEvent = async (
         payload.type || event.eventTypeCode,
         nextStartAt,
         nextEndAt,
+        nextTimezoneName,
         nextMode,
         nextMode === 'video' ? 'Video Conference' : null,
         nextJoinUrl,
@@ -817,6 +845,11 @@ export const updateEvent = async (
             fieldName: 'scheduled_start_at',
             oldValue: event.scheduledStartAt,
             newValue: nextStartAt,
+          },
+          {
+            fieldName: 'timezone_name',
+            oldValue: event.timezoneName,
+            newValue: nextTimezoneName,
           },
           {
             fieldName: 'client_visible_flag',

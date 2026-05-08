@@ -223,6 +223,11 @@ const envSchema = z.object({
 
 const parsedEnv = envSchema.parse(rawEnv);
 
+if (parsedEnv.APP_ENV !== 'development') {
+  parsedEnv.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN = true;
+  parsedEnv.FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN = true;
+}
+
 if (parsedEnv.EMAIL_PROVIDER_MODE === 'resend') {
   if (!parsedEnv.RESEND_API_KEY || !parsedEnv.EMAIL_FROM_ADDRESS) {
     throw new Error(
