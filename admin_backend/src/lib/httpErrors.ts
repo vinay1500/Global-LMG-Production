@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { env } from '../config/env.js';
+import { getDatabaseErrorDetails, isDatabaseOverloadedError } from './mysql.js';
 import { getRequestId, logEvent } from './observability.js';
 
 export class AppError extends Error {
@@ -36,6 +37,13 @@ export const asyncHandler =
     Promise.resolve(handler(request, response, next)).catch(next);
   };
 
+const GENERIC_INTERNAL_ERROR_MESSAGE =
+  'Unexpected server error. Reference the request ID when contacting support.';
+const SERVICE_UNAVAILABLE_MESSAGE =
+  'Service is temporarily unavailable. Please try again shortly.';
+
+const shouldExposeErrorDetails = () => env.APP_ENV !== 'production';
+
 export const errorMiddleware = (
   error: unknown,
   request: Request,
@@ -54,19 +62,42 @@ export const errorMiddleware = (
       statusCode: error.statusCode,
     });
 
+    const exposeErrorDetails = error.statusCode < 500 || shouldExposeErrorDetails();
+
     response.status(error.statusCode).json({
       error: error.code,
-      issues: error.issues,
-      message: error.message,
+      issues: exposeErrorDetails ? error.issues : undefined,
+      message: exposeErrorDetails ? error.message : GENERIC_INTERNAL_ERROR_MESSAGE,
+      requestId,
+    });
+    return;
+  }
+
+  if (isDatabaseOverloadedError(error)) {
+    const databaseError = getDatabaseErrorDetails(error);
+    logEvent('error', 'request.database_unavailable', {
+      databaseError,
+      method: request.method,
+      path: request.originalUrl,
+      requestId,
+      statusCode: 503,
+    });
+
+    response.status(503).json({
+      code: 'service_unavailable',
+      error: 'service_unavailable',
+      message: SERVICE_UNAVAILABLE_MESSAGE,
       requestId,
     });
     return;
   }
 
   const message = error instanceof Error ? error.message : 'Unexpected server error.';
+  const errorName = error instanceof Error ? error.name : 'UnknownError';
+  const exposeErrorDetails = shouldExposeErrorDetails();
   logEvent('error', 'request.error', {
     errorMessage: message,
-    errorName: error instanceof Error ? error.name : 'UnknownError',
+    errorName,
     errorStack: env.APP_ENV === 'production' ? undefined : error instanceof Error ? error.stack : undefined,
     method: request.method,
     path: request.originalUrl,
@@ -76,7 +107,9 @@ export const errorMiddleware = (
 
   response.status(500).json({
     error: 'internal_server_error',
-    message,
+    errorName: exposeErrorDetails ? errorName : undefined,
+    message: exposeErrorDetails ? message : GENERIC_INTERNAL_ERROR_MESSAGE,
     requestId,
+    stack: exposeErrorDetails && error instanceof Error ? error.stack : undefined,
   });
 };

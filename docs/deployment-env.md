@@ -14,6 +14,35 @@ npm run validate:production-env -- \
 
 The validator does not print secret values. Keep real env files outside Git.
 
+## Canonical Env Strategy
+
+Use three distinct env-file classes:
+
+- Local development: `backend/.env`, `admin_backend/.env`, `frontend/.env`,
+  and `admin_frontend/.env` are ignored local files only.
+- Production on the server: real env files live outside Git under
+  `/etc/global-lmg`, for example `/etc/global-lmg/backend.env` and
+  `/etc/global-lmg/admin_backend.env`. Frontend build env files may live in the
+  release checkout while building, but they must be generated from server-side
+  secrets/config management, not committed.
+- Tracked templates: `deploy/env/*.production.example` are the canonical
+  production templates in this repository. They intentionally contain obvious
+  placeholders and should fail validation until real server values replace them.
+
+App-level `.env.production` or `.env.production.example` files are ignored
+scratch files and are not canonical production templates. Do not copy them to a
+server as-is, and do not copy real server env files back into the repo.
+
+Canonical launch hostnames:
+
+- Client web: `https://app.globallmg.org`
+- Admin web: `https://admin.globallmg.org`
+- Client API: `https://api.globallmg.org/api/v1`
+- Admin API: `https://admin-api.globallmg.org/api/v1/admin`
+
+Do not use `beta.globallmg.org` in production env files unless deliberately
+deploying a separate staging target.
+
 ## Validation Warning Policy
 
 Run validation against the real server env files, not only the placeholder
@@ -98,7 +127,42 @@ Required core values:
 - `MYSQL_WAIT_FOR_CONNECTIONS=true`
 - `MYSQL_CONNECT_TIMEOUT_MS=5000`
 - `MYSQL_SSL_MODE=REQUIRED`
-- `MYSQL_SSL_CA_PATH=/etc/global-lmg/aiven-ca.pem` or `MYSQL_SSL_CA=<pem content>`
+- `MYSQL_SSL_CA_PATH=/etc/global-lmg/certs/aiven-ca.pem` or `MYSQL_SSL_CA=<pem content>`
+
+Use an absolute `MYSQL_SSL_CA_PATH` in production so PM2/systemd working
+directory changes cannot break Aiven TLS. Store the CA outside the repo, for
+example under `/etc/global-lmg/certs/`, and do not commit certificate files.
+Relative CA paths remain supported for local development and resolve from the
+backend package directory, not the shell cwd.
+
+### MySQL Pool Sizing
+
+Each PM2 API process owns its own MySQL connection pool. Size the client API and
+admin API together against the Aiven plan limit:
+
+```text
+total_app_connections =
+  (backend_pm2_instances x backend_pool_limit)
+  + (admin_pm2_instances x admin_pool_limit)
+```
+
+Keep `total_app_connections` below about 70% of Aiven `max_connections` so
+migrations, admin tools, manual database access, and Aiven maintenance have
+headroom. For example, 1 backend instance plus 1 admin backend instance with
+`MYSQL_CONNECTION_LIMIT=20` each reserves up to 40 app connections. On an Aiven
+plan with `max_connections=100`, keep total configured app pool capacity at or
+below 70.
+
+Early launch recommendation:
+
+- `MYSQL_CONNECTION_LIMIT=20`
+- `MYSQL_QUEUE_LIMIT=100`
+- one PM2 instance each for the client API and admin API unless monitoring
+  proves more capacity is needed
+
+Do not increase PM2 instances without recalculating the formula and checking the
+Aiven plan's max connections. Upgrade Aiven before scaling app instances far
+enough that configured pools would crowd the database.
 
 Provider values:
 
@@ -212,7 +276,13 @@ Required core values:
 - `MYSQL_WAIT_FOR_CONNECTIONS=true`
 - `MYSQL_CONNECT_TIMEOUT_MS=5000`
 - `MYSQL_SSL_MODE=REQUIRED`
-- `MYSQL_SSL_CA_PATH=/etc/global-lmg/aiven-ca.pem` or `MYSQL_SSL_CA=<pem content>`
+- `MYSQL_SSL_CA_PATH=/etc/global-lmg/certs/aiven-ca.pem` or `MYSQL_SSL_CA=<pem content>`
+
+Use an absolute `MYSQL_SSL_CA_PATH` in production so PM2/systemd working
+directory changes cannot break Aiven TLS. Store the CA outside the repo, for
+example under `/etc/global-lmg/certs/`, and do not commit certificate files.
+Relative CA paths remain supported for local development and resolve from the
+admin backend package directory, not the shell cwd.
 
 Provider values:
 
@@ -265,6 +335,10 @@ Calendar:
   - `GOOGLE_CALENDAR_SEND_UPDATES=all`
   - `GOOGLE_CALENDAR_IMPERSONATE_DOMAIN=globallmg.org`
 
+Calendar and Google Meet sync are admin-backend responsibilities. The client
+backend does not need `CALENDAR_*` variables; it only reads event data that the
+admin backend creates or syncs.
+
 Bootstrap:
 
 - `ADMIN_BOOTSTRAP_ENABLED=false` after the first production admin is created.
@@ -303,12 +377,17 @@ The validator fails for:
 
 - non-production `APP_ENV`
 - weak or placeholder-like `AUTH_SESSION_SECRET`
+- placeholder-like MySQL passwords or provider credentials
 - non-HTTPS web origins
+- beta/localhost production origins or frontend API bases
 - missing DB SSL
 - malformed Sentry DSNs
 - preview email/SMS modes
+- preview payment mode
 - invalid `GOOGLE_AUTH_MODE`
 - missing required provider variables when a provider/payment mode is enabled
+- missing Resend/Twilio webhook secrets and admin webhook public base URL when
+  those providers are enabled for admin delivery tracking
 
 The validator warns, but does not fail by default, for:
 

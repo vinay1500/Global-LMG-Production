@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
+import { getDatabaseErrorDetails, isDatabaseOverloadedError } from './mysql.js';
 import { getRequestId, logEvent } from './observability.js';
 
 export class ApiError extends Error {
@@ -49,6 +50,9 @@ export const internalServerError = (message = 'Unexpected server error.') =>
 export const serviceUnavailable = (code: string, message: string) =>
   new ApiError(503, code, message);
 
+const SERVICE_UNAVAILABLE_MESSAGE =
+  'Service is temporarily unavailable. Please try again shortly.';
+
 export const asyncHandler =
   (
     handler: (request: Request, response: Response, next: NextFunction) => Promise<void> | void
@@ -97,6 +101,25 @@ export const errorHandler = (
     response.status(400).json({
       error: 'invalid_json_body',
       message: 'Request body contains invalid JSON.',
+      requestId,
+    });
+    return;
+  }
+
+  if (isDatabaseOverloadedError(error)) {
+    const databaseError = getDatabaseErrorDetails(error);
+    logEvent('error', 'request.database_unavailable', {
+      databaseError,
+      method: request.method,
+      path: request.originalUrl,
+      requestId,
+      statusCode: 503,
+    });
+
+    response.status(503).json({
+      code: 'service_unavailable',
+      error: 'service_unavailable',
+      message: SERVICE_UNAVAILABLE_MESSAGE,
       requestId,
     });
     return;

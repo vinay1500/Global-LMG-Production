@@ -47,7 +47,9 @@ Required for local/Aiven beta:
 - `MYSQL_USER`
 - `MYSQL_PASSWORD`
 - `MYSQL_SSL_MODE=REQUIRED`
-- `MYSQL_SSL_CA=../certs/aiven/ca.pem`
+- `MYSQL_SSL_CA_PATH=../certs/aiven/ca.pem` for local beta, or an absolute
+  path such as `/etc/global-lmg/certs/aiven-ca.pem` for production-like PM2
+  runs.
 - `DOCUMENT_STORAGE_DRIVER=local`
 - `DOCUMENT_STORAGE_ROOT=../storage/glmg-uploads`
 - `EMAIL_PROVIDER_MODE=disabled` unless a real provider is configured
@@ -76,7 +78,9 @@ Required for local/Aiven beta:
 - `MYSQL_USER`
 - `MYSQL_PASSWORD`
 - `MYSQL_SSL_MODE=REQUIRED`
-- `MYSQL_SSL_CA=../certs/aiven/ca.pem`
+- `MYSQL_SSL_CA_PATH=../certs/aiven/ca.pem` for local beta, or an absolute
+  path such as `/etc/global-lmg/certs/aiven-ca.pem` for production-like PM2
+  runs.
 - `DOCUMENT_STORAGE_DRIVER=local`
 - `DOCUMENT_STORAGE_ROOT=../storage/glmg-uploads`
 - `EMAIL_PROVIDER_MODE=disabled` unless a real provider is configured

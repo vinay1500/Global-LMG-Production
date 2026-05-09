@@ -50,6 +50,39 @@ On a 4 GB VPS, run one PM2 instance per API and keep ClamAV local only if swap,
 log rotation, and alerts are configured. On an 8 GB VPS, the sample two-instance
 PM2 layout is reasonable for early traffic.
 
+## MySQL Pool Capacity
+
+Each backend PM2 process has its own MySQL pool, so database capacity is a
+combined client API plus admin API calculation:
+
+```text
+total_app_connections =
+  (backend_pm2_instances x backend_pool_limit)
+  + (admin_pm2_instances x admin_pool_limit)
+```
+
+Keep total configured app connections below about 70% of the Aiven
+`max_connections` value. This leaves room for migrations, provider jobs, manual
+diagnostics, and Aiven maintenance.
+
+Examples:
+
+- 1 backend + 1 admin backend, `MYSQL_CONNECTION_LIMIT=20` each = 40 total app
+  connections.
+- If Aiven `max_connections=100`, keep total app pool capacity at or below 70.
+- With two backend instances and two admin backend instances at pool 20, total
+  app capacity is 80, which is too high for a 100-connection Aiven tier.
+
+Early launch recommendation:
+
+- `MYSQL_CONNECTION_LIMIT=20`
+- `MYSQL_QUEUE_LIMIT=100`
+- one PM2 instance per API on the minimum VPS
+
+Do not increase PM2 instances without checking the Aiven max connection limit
+and the formula above. Upgrade the Aiven tier before increasing app instances so
+far that pool capacity approaches the database limit.
+
 ## Swap
 
 Configure swap to absorb short spikes, not to mask chronic RAM shortage:

@@ -1,11 +1,17 @@
 import { API_BASE_URL } from '../../config/env';
 
 const joinApiPath = (path: string) => {
-  if (API_BASE_URL.endsWith('/')) {
-    return `${API_BASE_URL.slice(0, -1)}${path}`;
+  const baseUrl = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
+
+  if (baseUrl.endsWith('/v1/admin') && path.startsWith('/v1/admin')) {
+    return `${baseUrl}${path.slice('/v1/admin'.length)}`;
   }
 
-  return `${API_BASE_URL}${path}`;
+  if (baseUrl.endsWith('/v1') && path.startsWith('/v1')) {
+    return `${baseUrl}${path.slice('/v1'.length)}`;
+  }
+
+  return `${baseUrl}${path}`;
 };
 
 export const API_ENDPOINTS = {

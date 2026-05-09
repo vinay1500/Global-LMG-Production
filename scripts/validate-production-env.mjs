@@ -144,6 +144,53 @@ const isPlaceholderLikeSecret = (value) => {
   return false;
 };
 
+const isPlaceholderLikeValue = (value) => placeholderSecretPattern.test(value.trim());
+
+const validateRequiredValue = (scope, key, value, description = key, options = {}) => {
+  if (!value) {
+    fail(scope, key, `${description} is required.`);
+    return false;
+  }
+
+  const placeholderLike = options.secret === false
+    ? isPlaceholderLikeValue(value)
+    : isPlaceholderLikeSecret(value);
+
+  if (placeholderLike) {
+    fail(scope, key, `${description} still looks placeholder-like.`);
+    return false;
+  }
+
+  return true;
+};
+
+const validateProductionHostname = (scope, key, value, expectedHostname) => {
+  if (!value || isRelativeApi(value)) {
+    return;
+  }
+
+  try {
+    const parsed = new URL(value);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      fail(scope, key, `${key} must not point to localhost in production.`);
+      return;
+    }
+
+    if (hostname.includes('beta.globallmg.org')) {
+      fail(scope, key, `${key} must not point to beta.globallmg.org for production.`);
+      return;
+    }
+
+    if (expectedHostname && hostname !== expectedHostname) {
+      fail(scope, key, `${key} should point to ${expectedHostname} for the canonical production deployment.`);
+    }
+  } catch {
+    // The caller handles malformed URL failures.
+  }
+};
+
 const validateHttpsOrigin = (scope, key, value) => {
   if (!isHttps(value)) {
     fail(scope, key, `${key} must be an https:// origin in production.`);
@@ -160,6 +207,8 @@ const validateHttpsOrigin = (scope, key, value) => {
     fail(scope, key, `${key} must be a valid HTTPS origin.`);
     return;
   }
+
+  validateProductionHostname(scope, key, value);
 
   pass(scope, key, `${key} is a production HTTPS origin.`);
 };
@@ -193,11 +242,13 @@ const validateCoreApi = (scope, env, originKey) => {
 
   pass(scope, 'COOKIE_SECURE', 'Session and CSRF cookies resolve to Secure in production runtime.');
 
-  for (const key of ['MYSQL_HOST', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD']) {
-    if (!has(env, key)) {
-      fail(scope, key, `${key} is required.`);
+  for (const key of ['MYSQL_HOST', 'MYSQL_DATABASE', 'MYSQL_USER']) {
+    if (!validateRequiredValue(scope, key, get(env, key), key, { secret: false })) {
+      continue;
     }
   }
+
+  validateRequiredValue(scope, 'MYSQL_PASSWORD', get(env, 'MYSQL_PASSWORD'));
 
   const mysqlConnectionLimit = Number(get(env, 'MYSQL_CONNECTION_LIMIT') || '0');
   const mysqlQueueLimit = Number(get(env, 'MYSQL_QUEUE_LIMIT') || '0');
@@ -249,9 +300,26 @@ const validateEmail = (scope, env) => {
 
   if (!has(env, 'RESEND_API_KEY') || !has(env, 'EMAIL_FROM_ADDRESS')) {
     fail(scope, 'RESEND', 'EMAIL_PROVIDER_MODE=resend requires RESEND_API_KEY and EMAIL_FROM_ADDRESS.');
-  } else {
-    pass(scope, 'RESEND', 'Resend email mode has required variables.');
+    return;
   }
+
+  if (
+    !validateRequiredValue(scope, 'RESEND_API_KEY', get(env, 'RESEND_API_KEY')) ||
+    !validateRequiredValue(scope, 'EMAIL_FROM_ADDRESS', get(env, 'EMAIL_FROM_ADDRESS'), 'EMAIL_FROM_ADDRESS', { secret: false })
+  ) {
+    return;
+  }
+
+  if (scope === 'admin_backend') {
+    if (
+      !validateRequiredValue(scope, 'RESEND_WEBHOOK_SECRET', get(env, 'RESEND_WEBHOOK_SECRET')) ||
+      !validateRequiredValue(scope, 'WEBHOOK_PUBLIC_BASE_URL', get(env, 'WEBHOOK_PUBLIC_BASE_URL'))
+    ) {
+      return;
+    }
+  }
+
+  pass(scope, 'RESEND', 'Resend email mode has required variables.');
 };
 
 const validateSentry = (scope, env, dsnKey = 'SENTRY_DSN') => {
@@ -299,14 +367,53 @@ const validateSms = (scope, env) => {
     return;
   }
 
+  if (
+    !validateRequiredValue(scope, 'TWILIO_ACCOUNT_SID', get(env, 'TWILIO_ACCOUNT_SID')) ||
+    !validateRequiredValue(scope, 'TWILIO_AUTH_TOKEN', get(env, 'TWILIO_AUTH_TOKEN'))
+  ) {
+    return;
+  }
+
   if (mode === 'twilio' && !has(env, 'TWILIO_FROM_NUMBER') && !has(env, 'TWILIO_MESSAGING_SERVICE_SID')) {
     fail(scope, 'TWILIO', 'SMS_PROVIDER_MODE=twilio requires TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID.');
+    return;
+  }
+
+  if (
+    mode === 'twilio' &&
+    has(env, 'TWILIO_FROM_NUMBER') &&
+    !validateRequiredValue(scope, 'TWILIO_FROM_NUMBER', get(env, 'TWILIO_FROM_NUMBER'), 'TWILIO_FROM_NUMBER', { secret: false })
+  ) {
+    return;
+  }
+
+  if (
+    mode === 'twilio' &&
+    has(env, 'TWILIO_MESSAGING_SERVICE_SID') &&
+    !validateRequiredValue(scope, 'TWILIO_MESSAGING_SERVICE_SID', get(env, 'TWILIO_MESSAGING_SERVICE_SID'))
+  ) {
     return;
   }
 
   if (mode === 'twilio-verify' && !has(env, 'TWILIO_VERIFY_SERVICE_SID')) {
     fail(scope, 'TWILIO_VERIFY_SERVICE_SID', 'SMS_PROVIDER_MODE=twilio-verify requires TWILIO_VERIFY_SERVICE_SID.');
     return;
+  }
+
+  if (
+    mode === 'twilio-verify' &&
+      !validateRequiredValue(scope, 'TWILIO_VERIFY_SERVICE_SID', get(env, 'TWILIO_VERIFY_SERVICE_SID'), 'TWILIO_VERIFY_SERVICE_SID', { secret: false })
+  ) {
+    return;
+  }
+
+  if (scope === 'admin_backend') {
+    if (
+      !validateRequiredValue(scope, 'TWILIO_WEBHOOK_AUTH_TOKEN', get(env, 'TWILIO_WEBHOOK_AUTH_TOKEN')) ||
+      !validateRequiredValue(scope, 'WEBHOOK_PUBLIC_BASE_URL', get(env, 'WEBHOOK_PUBLIC_BASE_URL'))
+    ) {
+      return;
+    }
   }
 
   pass(scope, 'TWILIO', `Twilio ${mode} mode has required variables.`);
@@ -320,6 +427,11 @@ const validatePayments = (scope, env) => {
     return;
   }
 
+  if (mode === 'preview') {
+    fail(scope, 'PAYMENT_PROVIDER_MODE', 'preview payment mode is not allowed in production.');
+    return;
+  }
+
   if (mode !== 'razorpay') {
     fail(scope, 'PAYMENT_PROVIDER_MODE', 'PAYMENT_PROVIDER_MODE must be disabled or razorpay.');
     return;
@@ -328,6 +440,12 @@ const validatePayments = (scope, env) => {
   for (const key of ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET']) {
     if (!has(env, key)) {
       fail(scope, key, `${key} is required for Razorpay payments.`);
+    }
+  }
+
+  for (const key of ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET']) {
+    if (has(env, key)) {
+      validateRequiredValue(scope, key, get(env, key));
     }
   }
 
@@ -370,6 +488,11 @@ const validateStorage = (scope, env) => {
       fail(scope, key, `${key} is required for S3-compatible storage.`);
     }
   }
+
+  validateRequiredValue(scope, 'S3_ENDPOINT', get(env, 'S3_ENDPOINT'), 'S3_ENDPOINT', { secret: false });
+  validateRequiredValue(scope, 'S3_BUCKET', get(env, 'S3_BUCKET'), 'S3_BUCKET', { secret: false });
+  validateRequiredValue(scope, 'S3_ACCESS_KEY_ID', get(env, 'S3_ACCESS_KEY_ID'), 'S3_ACCESS_KEY_ID', { secret: false });
+  validateRequiredValue(scope, 'S3_SECRET_ACCESS_KEY', get(env, 'S3_SECRET_ACCESS_KEY'));
 
   if (results.some((result) => result.scope === scope && result.status === 'FAIL' && result.check.startsWith('S3_'))) {
     return;
@@ -422,6 +545,11 @@ const validateClientGoogleAuth = (scope, backendEnv, frontendEnv) => {
 
   if (!has(backendEnv, 'GOOGLE_CLIENT_ID') || !has(frontendEnv, 'VITE_GOOGLE_CLIENT_ID')) {
     fail(scope, 'GOOGLE_CLIENT_ID', 'Google auth needs GOOGLE_CLIENT_ID and VITE_GOOGLE_CLIENT_ID.');
+  } else if (
+    !validateRequiredValue(scope, 'GOOGLE_CLIENT_ID', get(backendEnv, 'GOOGLE_CLIENT_ID')) ||
+    !validateRequiredValue(scope, 'VITE_GOOGLE_CLIENT_ID', get(frontendEnv, 'VITE_GOOGLE_CLIENT_ID'))
+  ) {
+    return;
   } else {
     pass(scope, 'GOOGLE_AUTH', 'Google client auth variables are present.');
   }
@@ -466,17 +594,21 @@ const validateCalendar = (scope, env) => {
 
 const validateFrontend = (scope, env, apiKey) => {
   const apiBase = get(env, 'VITE_API_BASE_URL');
+  const expectedApiHost = scope === 'frontend' ? 'api.globallmg.org' : 'admin-api.globallmg.org';
 
   if (!apiBase) {
     fail(scope, 'VITE_API_BASE_URL', 'VITE_API_BASE_URL is required.');
   } else if (!isRelativeApi(apiBase) && !isHttps(apiBase)) {
     fail(scope, 'VITE_API_BASE_URL', 'VITE_API_BASE_URL must be relative or https://.');
   } else {
+    validateProductionHostname(scope, 'VITE_API_BASE_URL', apiBase, expectedApiHost);
     pass(scope, 'VITE_API_BASE_URL', `${apiKey} API base is production-safe.`);
   }
 
   if (scope === 'frontend' && has(env, 'VITE_PUBLIC_SITE_URL') && !isHttps(get(env, 'VITE_PUBLIC_SITE_URL'))) {
     fail(scope, 'VITE_PUBLIC_SITE_URL', 'VITE_PUBLIC_SITE_URL must use https://.');
+  } else if (scope === 'frontend' && has(env, 'VITE_PUBLIC_SITE_URL')) {
+    validateProductionHostname(scope, 'VITE_PUBLIC_SITE_URL', get(env, 'VITE_PUBLIC_SITE_URL'), 'app.globallmg.org');
   }
 };
 

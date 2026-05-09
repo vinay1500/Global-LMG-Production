@@ -20,6 +20,9 @@ const isMysqlConfigured = Boolean(
   env.MYSQL_HOST && env.MYSQL_DATABASE && env.MYSQL_USER && env.MYSQL_PASSWORD
 );
 
+// Migration discipline:
+// Never edit an applied migration. Add a new migration instead.
+// Checksums are intentionally fatal so drift is discovered before startup changes data.
 const MIGRATIONS: MigrationDefinition[] = [
   {
     id: '001-dashboard-schema',

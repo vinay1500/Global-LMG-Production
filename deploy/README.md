@@ -3,6 +3,17 @@
 These files are production samples only. Keep real `.env` files, service-account
 keys, CA certificates, backups, and uploaded documents outside git.
 
+Real production env files should live on the server under `/etc/global-lmg`,
+for example:
+
+- `/etc/global-lmg/backend.env`
+- `/etc/global-lmg/admin_backend.env`
+
+The tracked files in `deploy/env/*.production.example` are the canonical
+templates. App-local `.env`, `.env.production`, and `.env.production.example`
+files are ignored local scratch files and must not be treated as production
+source of truth.
+
 ## Files
 
 - `pm2/ecosystem.config.cjs` starts the client API and admin API from built
@@ -22,6 +33,11 @@ keys, CA certificates, backups, and uploaded documents outside git.
 See `docs/deployment-env.md` for the required production variables and provider
 mode rules. The example files contain placeholders only; never copy real server
 env files back into git.
+
+Before deploying, copy the relevant template to `/etc/global-lmg/*.env`, replace
+every placeholder on the server, and run the production env validator. Placeholder
+secrets, disabled launch providers, wrong webhook secrets, and beta/localhost
+origins should be fixed on the server env file, not in the tracked template.
 
 See `docs/monitoring-runbook.md` and `docs/monitoring-live-verification.md`
 for Sentry/UptimeRobot setup and current live verification status.
