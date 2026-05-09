@@ -6,6 +6,7 @@ import { createAuditEvent } from '../writeSupport.js';
 
 export type PlatformSettingValue = boolean | number | string | null;
 export type PlatformSettingValueType = 'boolean' | 'decimal' | 'integer' | 'json' | 'select' | 'string' | 'text';
+export type AdminMfaRequirementMode = 'enforce' | 'off' | 'warn';
 
 export type PlatformSetting = {
   category: string;
@@ -47,6 +48,10 @@ type SettingRule = {
   type: PlatformSettingValueType;
 };
 
+type CountRow = RowDataPacket & {
+  countValue: number;
+};
+
 export const PLATFORM_TIMEZONE_OPTIONS = [
   'Asia/Kolkata',
   'UTC',
@@ -61,6 +66,21 @@ export const PLATFORM_TIMEZONE_PATTERN =
 
 export const isAllowedPlatformTimezone = (value: string) =>
   (PLATFORM_TIMEZONE_OPTIONS as readonly string[]).includes(value);
+
+export const ADMIN_MFA_REQUIREMENT_MODES = ['off', 'warn', 'enforce'] as const;
+
+export const normalizeAdminMfaRequirementMode = (
+  value: unknown
+): AdminMfaRequirementMode => {
+  if (typeof value !== 'string') {
+    return 'off';
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return (ADMIN_MFA_REQUIREMENT_MODES as readonly string[]).includes(normalized)
+    ? (normalized as AdminMfaRequirementMode)
+    : 'off';
+};
 
 const SETTING_RULES: Record<string, SettingRule> = {
   'platform.default_currency': {
@@ -91,8 +111,13 @@ const SETTING_RULES: Record<string, SettingRule> = {
     pattern: /^[0-9+\-()\s.]*$/,
     type: 'string',
   },
+  'pricing.show_approximate_local_currency': { type: 'boolean' },
   'portal.maintenance_banner_enabled': { type: 'boolean' },
   'portal.maintenance_banner_message': { allowEmpty: true, maxLength: 500, type: 'text' },
+  'security.admin_mfa_required_mode': {
+    options: Array.from(ADMIN_MFA_REQUIREMENT_MODES),
+    type: 'select',
+  },
 };
 
 const decodeSettingValue = (rawValue: unknown): PlatformSettingValue => {
@@ -127,6 +152,47 @@ export const getPlatformDefaultTimezone = async (executor?: QueryExecutor) => {
   const value = rows[0] ? decodeSettingValue(rows[0].settingValueJson) : null;
 
   return typeof value === 'string' && isAllowedPlatformTimezone(value) ? value : 'UTC';
+};
+
+export const getAdminMfaRequirementMode = async (
+  executor?: QueryExecutor
+): Promise<AdminMfaRequirementMode> => {
+  const rows = await queryRows<Pick<PlatformSettingRow, 'settingValueJson'> & RowDataPacket>(
+    `SELECT setting_value_json AS settingValueJson
+     FROM platform_settings
+     WHERE setting_key = 'security.admin_mfa_required_mode'
+     LIMIT 1`,
+    [],
+    executor
+  );
+  const value = rows[0] ? decodeSettingValue(rows[0].settingValueJson) : null;
+
+  return normalizeAdminMfaRequirementMode(value);
+};
+
+const countActiveAdminsWithoutMfa = async () => {
+  const rows = await queryRows<CountRow>(
+    `SELECT COUNT(DISTINCT u.id) AS countValue
+     FROM users u
+     INNER JOIN user_roles ur
+       ON ur.user_id = u.id
+      AND ur.is_active = 1
+      AND (ur.starts_at IS NULL OR ur.starts_at <= UTC_TIMESTAMP(6))
+      AND (ur.ends_at IS NULL OR ur.ends_at >= UTC_TIMESTAMP(6))
+     INNER JOIN roles r
+       ON r.code = ur.role_code
+      AND r.is_active = 1
+      AND r.code <> 'client'
+     LEFT JOIN admin_mfa_secrets ams
+       ON ams.user_id = u.id
+      AND ams.enabled_at IS NOT NULL
+     WHERE u.archived_at IS NULL
+       AND u.actor_type_code <> 'client'
+       AND u.login_enabled = 1
+       AND ams.id IS NULL`
+  );
+
+  return Number(rows[0]?.countValue || 0);
 };
 
 const mapRow = (row: PlatformSettingRow): PlatformSetting => {
@@ -261,6 +327,16 @@ export const updatePlatformSetting = async (
   const current = mapRow(existingRow);
   const normalizedValue = normalizeValue(key, payload.value, existingRow.valueType);
   const expectedVersion = payload.version ?? current.version;
+
+  if (key === 'security.admin_mfa_required_mode' && normalizedValue === 'enforce') {
+    const unenrolledAdminCount = await countActiveAdminsWithoutMfa();
+    if (unenrolledAdminCount > 0) {
+      throw badRequest(
+        'admin_mfa_enforcement_blocked',
+        `MFA enforcement cannot be enabled until ${unenrolledAdminCount} active admin account${unenrolledAdminCount === 1 ? '' : 's'} have enrolled. Use warn mode during rollout.`
+      );
+    }
+  }
 
   const result = await executeStatement<ResultSetHeader>(
     `UPDATE platform_settings

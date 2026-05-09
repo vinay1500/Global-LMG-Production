@@ -18,8 +18,16 @@ type AdminSessionContextValue = {
     identifier: string;
     password: string;
     rememberMe: boolean;
-  }) => Promise<{ status: 'authenticated' | 'password_rotation_required' }>;
+  }) => Promise<{
+    message?: string;
+    mfaToken?: string;
+    status: 'authenticated' | 'mfa_required' | 'password_rotation_required';
+  }>;
   signOut: () => Promise<void>;
+  verifyMfa: (payload: {
+    code: string;
+    mfaToken: string;
+  }) => Promise<{ status: 'authenticated' | 'password_rotation_required' }>;
 };
 
 const AdminSessionContext = createContext<AdminSessionContextValue | null>(null);
@@ -60,10 +68,38 @@ export const AdminSessionProvider: React.FC<{ children: React.ReactNode }> = ({ 
         } as const;
       }
 
+      if (response.mfaRequired && response.mfaToken) {
+        return {
+          message: response.message,
+          mfaToken: response.mfaToken,
+          status: 'mfa_required',
+        } as const;
+      }
+
       throw new ApiRequestError(
         'admin_auth_incomplete',
         'This account needs an additional auth step before admin access.'
       );
+    },
+    []
+  );
+
+  const verifyMfa = useCallback(
+    async (payload: { code: string; mfaToken: string }) => {
+      setErrorMessage(null);
+      const response = await authApi.verifyMfaSignIn(payload);
+
+      if (!response.authenticated || !response.user) {
+        throw new ApiRequestError(
+          'admin_auth_incomplete',
+          'This account needs an additional auth step before admin access.'
+        );
+      }
+
+      setCurrentUser(response.user);
+      return {
+        status: response.user.mustRotatePassword ? 'password_rotation_required' : 'authenticated',
+      } as const;
     },
     []
   );
@@ -96,8 +132,9 @@ export const AdminSessionProvider: React.FC<{ children: React.ReactNode }> = ({ 
       refreshSession,
       signIn,
       signOut,
+      verifyMfa,
     }),
-    [changePassword, currentUser, errorMessage, isReady, refreshSession, signIn, signOut]
+    [changePassword, currentUser, errorMessage, isReady, refreshSession, signIn, signOut, verifyMfa]
   );
 
   return <AdminSessionContext.Provider value={value}>{children}</AdminSessionContext.Provider>;

@@ -37,11 +37,15 @@ export const isValidCompanyName = (value: string) =>
 export const isValidRole = (value: string) =>
   value.trim().length === 0 || ROLE_REGEX.test(trimField(value));
 
-export const getPasswordStrengthErrors = (value: string) => {
+export const getPasswordStrengthErrors = (
+  value: string,
+  context: { email?: string; name?: string } = {}
+) => {
   const errors: string[] = [];
+  const normalizedPassword = value.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
-  if (value.trim().length < 10) {
-    errors.push('Password must be at least 10 characters long.');
+  if (value.length < 12) {
+    errors.push('Password must be at least 12 characters long.');
   }
   if (!/[A-Z]/.test(value)) {
     errors.push('Password must include at least one uppercase letter.');
@@ -53,7 +57,39 @@ export const getPasswordStrengthErrors = (value: string) => {
     errors.push('Password must include at least one number.');
   }
   if (!/[^A-Za-z0-9]/.test(value)) {
-    errors.push('Password must include at least one special character.');
+    errors.push('Password must include at least one symbol.');
+  }
+
+  const commonSignals = [
+    'admin123',
+    'admin123456',
+    'changeme',
+    'defaultpassword',
+    'letmein',
+    'password',
+    'password1',
+    'password123',
+    'qwerty',
+    'qwerty123',
+    'welcome',
+    'welcome123',
+    'admin',
+    'global',
+    'globallmg',
+  ];
+  const emailLocalPart = context.email?.split('@')[0]?.toLowerCase().replace(/[^a-z0-9]+/g, '') || '';
+  const nameTokens = (context.name || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.replace(/[^a-z0-9]+/g, ''))
+    .filter((token) => token.length >= 4);
+
+  if (
+    commonSignals.some((signal) => normalizedPassword.includes(signal)) ||
+    (emailLocalPart.length >= 4 && normalizedPassword.includes(emailLocalPart)) ||
+    nameTokens.some((token) => normalizedPassword.includes(token))
+  ) {
+    errors.push('Choose a less common password.');
   }
 
   return errors;

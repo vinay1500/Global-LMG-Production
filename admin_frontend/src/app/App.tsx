@@ -19,7 +19,7 @@ const createErrorReferenceId = (error: Error) => {
   return Math.abs(hash).toString(36).padStart(8, '0').slice(0, 8);
 };
 
-class AdminRuntimeGuard extends React.Component<
+export class AdminRuntimeGuard extends React.Component<
   { children: React.ReactNode },
   AdminRuntimeGuardState
 > {
@@ -36,10 +36,18 @@ class AdminRuntimeGuard extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    if (import.meta.env.DEV) {
+      console.error('admin_frontend.runtime_error', {
+        componentStack: errorInfo.componentStack,
+        message: error.message,
+        stack: error.stack,
+      });
+      return;
+    }
+
     console.error('admin_frontend.runtime_error', {
-      componentStack: errorInfo.componentStack,
       message: error.message,
-      stack: error.stack,
+      referenceId: this.state.errorReferenceId,
     });
   }
 

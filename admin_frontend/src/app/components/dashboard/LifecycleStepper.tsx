@@ -1,6 +1,6 @@
 import React from 'react';
 import { Check } from 'lucide-react';
-import type { StageItem } from '../../data/seedData';
+import type { StageItem } from '../../data/adminTypes';
 
 export const LifecycleStepper: React.FC<{ stages: StageItem[]; compact?: boolean }> = ({ stages, compact }) => {
   // Add safety check for undefined or empty stages

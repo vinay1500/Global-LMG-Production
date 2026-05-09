@@ -3,6 +3,7 @@ import { badRequest } from '../../lib/httpErrors.js';
 import { executeStatement, queryRows, type QueryExecutor } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
 import { createAuditEvent } from '../writeSupport.js';
+import { isValidGstin, normalizeGstin } from './gstin.js';
 
 export type InvoiceTaxMode = 'exempt' | 'forward_charge' | 'reverse_charge';
 export type InvoiceFallbackTaxType = 'cgst_sgst' | 'igst' | 'none';
@@ -79,8 +80,6 @@ type InvoiceSettingsRow = RowDataPacket & {
   reverseChargeNote: string | null;
   taxMode: InvoiceTaxMode;
 };
-
-const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 
 const trimNullable = (value: string | null | undefined) => {
   if (value === null || value === undefined) {
@@ -230,7 +229,7 @@ export const updateInvoiceSettings = async (
       payload.defaultSacCode === undefined ? existing.defaultSacCode : trimNullable(payload.defaultSacCode),
     fallbackTaxType: payload.fallbackTaxType || existing.fallbackTaxType,
     gstEnabled: payload.gstEnabled ?? existing.gstEnabled,
-    gstin: payload.gstin === undefined ? existing.gstin : trimNullable(payload.gstin?.toUpperCase() || null),
+    gstin: payload.gstin === undefined ? existing.gstin : normalizeGstin(payload.gstin),
     invoiceFooter:
       payload.invoiceFooter === undefined ? existing.invoiceFooter : trimNullable(payload.invoiceFooter),
     invoicePrefix: payload.invoicePrefix?.trim() || existing.invoicePrefix,
@@ -249,8 +248,8 @@ export const updateInvoiceSettings = async (
     taxMode: payload.taxMode || existing.taxMode,
   };
 
-  if (next.gstin && !GSTIN_PATTERN.test(next.gstin)) {
-    throw badRequest('invalid_gstin', 'GSTIN format is invalid.');
+  if (next.gstin && !isValidGstin(next.gstin)) {
+    throw badRequest('invalid_gstin', 'GSTIN must be a 15-character Indian GSTIN.');
   }
 
   if (next.defaultGstRateBps < 0 || next.defaultGstRateBps > 10000) {

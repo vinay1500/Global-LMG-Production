@@ -1,13 +1,17 @@
 import { type Request, Router } from 'express';
 import { z } from 'zod';
+import { env } from '../config/env.js';
 import { requireActor, assertPermission } from '../lib/authorization.js';
 import { requireAuthenticatedUser } from '../lib/authSession.js';
+import { hashOpaqueValue } from '../lib/authCrypto.js';
 import { requireCsrf } from '../lib/csrf.js';
-import { badRequest, forbidden } from '../lib/httpErrors.js';
+import { badRequest, forbidden, tooManyRequests } from '../lib/httpErrors.js';
 import { asyncHandler } from '../lib/httpErrors.js';
 import { getIdempotencyKey, runIdempotentJson } from '../lib/idempotency.js';
 import { renderInvoicePdf } from '../lib/invoicePdf.js';
+import { getRequestIpAddress } from '../lib/requestSecurity.js';
 import { clientAccountsService } from '../modules/clientAccounts/service.js';
+import { consumePersistentRateLimit } from '../modules/auth/persistentRateLimiter.js';
 import { domainService } from '../modules/domain/service.js';
 import {
   createInvoicePaymentOrder,
@@ -44,15 +48,15 @@ const accountNameSchema = z.object({
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(200),
-  newPassword: z.string().min(10).max(200),
+  newPassword: z.string().min(1).max(200),
 });
 
 const emailChangeRequestSchema = z.object({
   email: z.string().trim().email(),
 });
 
-const emailChangeConfirmSchema = z.object({
-  code: z.string().trim().min(4).max(12),
+export const emailChangeConfirmSchema = z.object({
+  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit verification code.'),
   email: z.string().trim().email(),
 });
 
@@ -60,8 +64,8 @@ const phoneChangeRequestSchema = z.object({
   phone: z.string().trim().min(8).max(40),
 });
 
-const phoneChangeConfirmSchema = z.object({
-  code: z.string().trim().min(4).max(12),
+export const phoneChangeConfirmSchema = z.object({
+  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit verification code.'),
   phone: z.string().trim().min(8).max(40),
 });
 
@@ -92,6 +96,55 @@ const sanitizeDownloadFilename = (value: string) =>
   value.replace(/["\r\n]+/g, '_').trim() || 'download.bin';
 
 const getUserAgent = (request: Request) => request.get('user-agent') || null;
+
+const hashRateLimitIdentifier = (value: string) =>
+  hashOpaqueValue(value.trim().toLowerCase(), env.AUTH_SESSION_SECRET);
+
+const consumeAccountCodeRateLimit = async (
+  actionCode:
+    | 'email-change-confirm'
+    | 'email-change-request'
+    | 'phone-change-confirm'
+    | 'phone-change-request',
+  request: Request,
+  userPublicId: string,
+  identifier?: string
+) => {
+  const keys = [
+    {
+      key: `${actionCode}:ip:${getRequestIpAddress(request)}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_IP_MAX_ATTEMPTS,
+    },
+    {
+      key: `${actionCode}:user:${userPublicId}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    },
+  ];
+
+  if (identifier?.trim()) {
+    keys.push({
+      key: `${actionCode}:user-identifier:${userPublicId}:${hashRateLimitIdentifier(identifier)}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    });
+  }
+
+  for (const key of keys) {
+    const rateLimit = await consumePersistentRateLimit({
+      key: key.key,
+      maxAttempts: key.maxAttempts,
+      scope: 'client_account_codes',
+      windowMs: env.AUTH_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+    });
+
+    if (!rateLimit.allowed) {
+      throw tooManyRequests(
+        'too_many_attempts',
+        'Too many attempts. Please wait before trying again.',
+        rateLimit.retryAfterSeconds
+      );
+    }
+  }
+};
 
 meRouter.get(
   '/me/preferences',
@@ -174,6 +227,12 @@ meRouter.post(
     requireCsrf(request);
     const authenticatedUser = await requireAuthenticatedUser(request, response);
     const payload = emailChangeRequestSchema.parse(request.body);
+    await consumeAccountCodeRateLimit(
+      'email-change-request',
+      request,
+      authenticatedUser.id,
+      payload.email
+    );
     response.json(await clientAccountsService.requestEmailChange(authenticatedUser.id, payload.email));
   })
 );
@@ -183,10 +242,17 @@ meRouter.post(
   asyncHandler(async (request, response) => {
     requireCsrf(request);
     const authenticatedUser = await requireAuthenticatedUser(request, response);
+    const payload = emailChangeConfirmSchema.parse(request.body);
+    await consumeAccountCodeRateLimit(
+      'email-change-confirm',
+      request,
+      authenticatedUser.id,
+      payload.email
+    );
     response.json(
       await clientAccountsService.confirmEmailChange(
         authenticatedUser.id,
-        emailChangeConfirmSchema.parse(request.body)
+        payload
       )
     );
   })
@@ -198,6 +264,12 @@ meRouter.post(
     requireCsrf(request);
     const authenticatedUser = await requireAuthenticatedUser(request, response);
     const payload = phoneChangeRequestSchema.parse(request.body);
+    await consumeAccountCodeRateLimit(
+      'phone-change-request',
+      request,
+      authenticatedUser.id,
+      payload.phone
+    );
     response.json(await clientAccountsService.requestPhoneChange(authenticatedUser.id, payload.phone));
   })
 );
@@ -207,10 +279,17 @@ meRouter.post(
   asyncHandler(async (request, response) => {
     requireCsrf(request);
     const authenticatedUser = await requireAuthenticatedUser(request, response);
+    const payload = phoneChangeConfirmSchema.parse(request.body);
+    await consumeAccountCodeRateLimit(
+      'phone-change-confirm',
+      request,
+      authenticatedUser.id,
+      payload.phone
+    );
     response.json(
       await clientAccountsService.confirmPhoneChange(
         authenticatedUser.id,
-        phoneChangeConfirmSchema.parse(request.body)
+        payload
       )
     );
   })
@@ -284,8 +363,10 @@ meRouter.get(
       }
     );
 
+    response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Content-Disposition', `attachment; filename="${sanitizeDownloadFilename(result.originalName)}"`);
     response.setHeader('Content-Type', result.mimeType);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(result.content);
   })
 );
@@ -329,6 +410,7 @@ meRouter.get(
   asyncHandler(async (request, response) => {
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'invoice.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
     const invoices = await domainService.listClientInvoices(actor.clientAccountId!);
     response.json(invoices);
   })
@@ -339,6 +421,7 @@ meRouter.get(
   asyncHandler(async (request, response) => {
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'invoice.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
     const invoice = await domainService.getClientInvoice(
       actor.clientAccountId!,
       getRouteParam(request.params.invoiceId)
@@ -352,6 +435,7 @@ meRouter.get(
   asyncHandler(async (request, response) => {
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'invoice.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
     const invoice = await domainService.getClientInvoice(
       actor.clientAccountId!,
       getRouteParam(request.params.invoiceId)
@@ -362,6 +446,7 @@ meRouter.get(
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     response.setHeader('Content-Type', 'application/pdf');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(pdf);
   })
 );
@@ -373,6 +458,7 @@ meRouter.post(
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'invoice.view');
     assertPermission(actor.permissionCodes, 'payment.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
     const idempotencyKey = getIdempotencyKey(request);
     if (!idempotencyKey) {
       throw badRequest('idempotency_key_required', 'Idempotency-Key is required to create a payment order.');
@@ -386,6 +472,7 @@ meRouter.post(
       operation: () =>
         createInvoicePaymentOrder({
           actorUserId: actor.userId,
+          actorUserPublicId: actor.publicId,
           amount: payload.amount,
           clientAccountId: actor.clientAccountId!,
           idempotencyKey,
@@ -405,17 +492,35 @@ meRouter.post(
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'invoice.view');
     assertPermission(actor.permissionCodes, 'payment.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
+    const idempotencyKey = getIdempotencyKey(request);
+    if (!idempotencyKey) {
+      throw badRequest('idempotency_key_required', 'Idempotency-Key is required to verify a payment.');
+    }
     const payload = invoicePaymentVerifySchema.parse(request.body);
-    response.json(
-      await verifyInvoicePayment({
-        actorUserId: actor.userId,
-        clientAccountId: actor.clientAccountId!,
-        invoicePublicId: getRouteParam(request.params.invoiceId),
-        razorpayOrderId: payload.razorpay_order_id,
-        razorpayPaymentId: payload.razorpay_payment_id,
-        razorpaySignature: payload.razorpay_signature,
-      })
-    );
+    const invoiceId = getRouteParam(request.params.invoiceId);
+    const result = await runIdempotentJson(request, {
+      actorKey: actor.publicId,
+      actorUserId: actor.userId,
+      body: {
+        invoiceId,
+        ...payload,
+      },
+      operation: () =>
+        verifyInvoicePayment({
+          actorUserId: actor.userId,
+          actorUserPublicId: actor.publicId,
+          clientAccountId: actor.clientAccountId!,
+          invoicePublicId: invoiceId,
+          razorpayOrderId: payload.razorpay_order_id,
+          razorpayPaymentId: payload.razorpay_payment_id,
+          razorpaySignature: payload.razorpay_signature,
+        }),
+      scope: 'client:invoice:payment:verify',
+    });
+
+    response.setHeader('Idempotency-Replayed', result.replayed ? 'true' : 'false');
+    response.status(result.statusCode).json(result.body);
   })
 );
 
@@ -424,6 +529,7 @@ meRouter.get(
   asyncHandler(async (request, response) => {
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'payment.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
     const payments = await domainService.listClientPayments(actor.clientAccountId!);
     response.json(payments);
   })
@@ -434,6 +540,7 @@ meRouter.get(
   asyncHandler(async (request, response) => {
     const actor = await requireClientActor(request, response);
     assertPermission(actor.permissionCodes, 'refund.view');
+    await domainService.assertCurrentClientAccountAccess(actor.publicId, actor.clientAccountId!);
     const refunds = await domainService.listClientRefunds(actor.clientAccountId!);
     response.json(refunds);
   })

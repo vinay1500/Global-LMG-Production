@@ -101,6 +101,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return applyAuthResult(await authApi.signUp(payload));
   };
 
+  const issueGoogleNonce = async () => {
+    await ensureAuthReady();
+    return authApi.issueGoogleNonce();
+  };
+
   const signInWithGoogle = async (
     payload: GoogleSignInPayload
   ): Promise<AuthActionResult> => {
@@ -169,6 +174,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setAuthMode,
         signIn,
         signUp,
+        issueGoogleNonce,
         signInWithGoogle,
         verifyEmail,
         submitGooglePhone,

@@ -4,7 +4,7 @@ import {
   MapPin, CheckCircle, XCircle, AlertCircle, ChevronLeft, 
   ChevronRight, MoreVertical, Plus, List, LayoutGrid, Eye, EyeOff
 } from 'lucide-react';
-import { type Matter, type PlatformEvent, type PlatformUser } from '../data/seedData';
+import { type Matter, type PlatformEvent, type PlatformUser } from '../data/adminTypes';
 import { StatusBadge } from '../components/dashboard/StatusBadge';
 
 type EventMutationPayload = {
@@ -238,7 +238,7 @@ export const MeetingsWorkspace: React.FC<MeetingsWorkspaceProps> = ({
             <button 
               className="p-1.5 rounded-md flex items-center text-gray-300 cursor-not-allowed"
               disabled
-              title="Calendar grid view is not implemented. Agenda is the live DB-backed view."
+              title="Agenda is the active scheduling view."
               type="button"
             >
               <LayoutGrid className="w-4 h-4" />
@@ -475,7 +475,7 @@ export const MeetingsWorkspace: React.FC<MeetingsWorkspaceProps> = ({
               <div className="flex items-center gap-2">
                 <button className="p-1 text-gray-400 hover:text-gray-900 bg-white border border-gray-200 rounded" onClick={() => setCurrentDate((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))} type="button"><ChevronLeft className="w-4 h-4" /></button>
                 <span className="text-sm font-medium text-gray-900 min-w-[120px] text-center">
-                  {currentDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                  {currentDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
                 </span>
                 <button className="p-1 text-gray-400 hover:text-gray-900 bg-white border border-gray-200 rounded" onClick={() => setCurrentDate((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))} type="button"><ChevronRight className="w-4 h-4" /></button>
               </div>
@@ -517,7 +517,7 @@ export const MeetingsWorkspace: React.FC<MeetingsWorkspaceProps> = ({
                 {Object.entries(groupedEvents).map(([date, events]) => (
                   <div key={date}>
                     <h3 className="text-sm font-bold text-gray-900 border-b border-gray-200 pb-2 mb-4 sticky top-0 bg-gray-50/90 backdrop-blur z-10">
-                      {new Date(date).toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' })}
+                      {new Date(date).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                     </h3>
                     <div className="space-y-3 pl-2">
                       {events.map(evt => (
@@ -621,7 +621,7 @@ export const MeetingsWorkspace: React.FC<MeetingsWorkspaceProps> = ({
                     <CalendarIcon className="w-4 h-4" />
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-gray-900">{new Date(activeEvent.date).toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                    <p className="text-sm font-medium text-gray-900">{new Date(activeEvent.date).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
                     <p className="text-xs text-gray-500">{activeEvent.time} ({activeEvent.duration > 0 ? `${activeEvent.duration} minutes` : 'All Day'})</p>
                   </div>
                 </div>

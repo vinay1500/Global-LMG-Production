@@ -13,6 +13,10 @@ export const API_ENDPOINTS = {
     audit: () => joinApiPath('/v1/admin/audit'),
     auth: {
       me: () => joinApiPath('/v1/admin/auth/me'),
+      mfaDisable: () => joinApiPath('/v1/admin/auth/mfa/disable'),
+      mfaEnrollment: () => joinApiPath('/v1/admin/auth/mfa/enrollment'),
+      mfaEnrollmentVerify: () => joinApiPath('/v1/admin/auth/mfa/enrollment/verify'),
+      mfaSignIn: () => joinApiPath('/v1/admin/auth/mfa/sign-in'),
       password: () => joinApiPath('/v1/admin/auth/password'),
       passwordResetConfirm: () => joinApiPath('/v1/admin/auth/password-reset/confirm'),
       passwordResetRequest: () => joinApiPath('/v1/admin/auth/password-reset/request'),

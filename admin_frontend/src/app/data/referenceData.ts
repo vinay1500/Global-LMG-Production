@@ -1,4 +1,4 @@
-import type { LifecycleStage } from './seedData';
+import type { LifecycleStage } from './adminTypes';
 
 export const LIFECYCLE_STAGES: { id: LifecycleStage; label: string }[] = [
   { id: 'request-received', label: 'Request Received' },

@@ -31,7 +31,13 @@ export interface SignUpPayload {
 
 export interface GoogleSignInPayload {
   credential?: string;
+  nonce: string;
   rememberMe: boolean;
+}
+
+export interface GoogleNonceResult {
+  expiresAt: string;
+  nonce: string;
 }
 
 export interface VerificationPayload {
@@ -79,6 +85,7 @@ export interface AuthContextType {
   setAuthMode: (mode: AuthMode) => void;
   signIn: (payload: SignInPayload) => Promise<AuthActionResult>;
   signUp: (payload: SignUpPayload) => Promise<AuthActionResult>;
+  issueGoogleNonce: () => Promise<GoogleNonceResult>;
   signInWithGoogle: (payload: GoogleSignInPayload) => Promise<AuthActionResult>;
   verifyEmail: (payload: VerificationPayload) => Promise<AuthActionResult>;
   submitGooglePhone: (payload: PhoneCapturePayload) => Promise<AuthActionResult>;

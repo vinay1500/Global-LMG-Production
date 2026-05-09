@@ -170,7 +170,7 @@ const getConnection = async (env) => {
   }
 
   return mysql.createConnection({
-    connectTimeout: Number(env.MYSQL_CONNECTION_TIMEOUT_MS || 15000),
+    connectTimeout: Number(env.MYSQL_CONNECT_TIMEOUT_MS || env.MYSQL_CONNECTION_TIMEOUT_MS || 15000),
     database: env.MYSQL_DATABASE,
     dateStrings: true,
     host: env.MYSQL_HOST,

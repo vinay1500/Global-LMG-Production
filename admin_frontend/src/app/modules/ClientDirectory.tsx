@@ -5,7 +5,7 @@ import {
   LayoutGrid, List as ListIcon, Shield, CreditCard, MessageSquare, ArrowRight, Star, AlertCircle, Building2, Loader2
 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../data/formatters';
-import type { PlatformUser } from '../data/seedData';
+import type { PlatformUser } from '../data/adminTypes';
 import { StatusBadge } from '../components/dashboard/StatusBadge';
 import { EmptyState } from './EmptyState';
 import type { ClientListItem, CreateClientPayload, CreateClientResponse } from '../lib/api/contracts';
@@ -299,7 +299,7 @@ export const ClientDirectory = ({
                 resetCreateForm();
                 setCreateOpen(true);
               }}
-              title={onCreateClient ? 'Create a new client account.' : 'New Client creation is coming in the setup phase.'}
+              title={onCreateClient ? 'Create a new client account.' : 'Client creation is unavailable in this workspace.'}
               type="button"
             >
               <Plus className="w-4 h-4" /> New Client
@@ -598,6 +598,7 @@ export const ClientDirectory = ({
                     value={createForm.clientType}
                   >
                     <option value="individual">Individual</option>
+                    <option value="business">Business</option>
                     <option value="organization">Organization</option>
                   </select>
                 </label>

@@ -84,6 +84,11 @@ Key current privacy wording:
 - Submitted details may be used to respond to requests, assess follow-up, and coordinate next steps with internal teams or independently engaged professionals.
 - Submitting an enquiry does not, by itself, create an attorney-client relationship.
 - Portal uses essential session and CSRF cookies.
+- Email/SMS provider delivery events are retained for operational delivery
+  support for 90 days. Raw provider webhook payloads are minimized before
+  storage; direct recipient fields may still contain email addresses or phone
+  numbers and should be treated as PII. Production database and backup storage
+  should provide encryption at rest.
 - Region-specific rights handling, retention schedules, and portal account controls need review before production.
 
 Current footer note:

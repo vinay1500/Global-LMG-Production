@@ -111,7 +111,7 @@ const bootstrapAdmin = async () => {
            last_login_at, email_verified_at, phone_verified_at, created_at, updated_at,
            archived_at, row_version
          ) VALUES (
-           ?, ?, NULL, ?, ?, ?, 'staff', 'active', 'Asia/Kolkata', 'en-IN',
+           ?, ?, NULL, ?, ?, ?, 'staff', 'active', 'UTC', 'en-US',
            NULL, 1, NULL, UTC_TIMESTAMP(6), NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6),
            NULL, 1
          )`,

@@ -1,20 +1,31 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/httpErrors.js';
+import { isMessageContentWithinLimit, sanitizeMessageContent } from '../lib/messageContent.js';
 import { archiveThread, createThread, getWorkspace, markThreadRead, replyToThread } from '../modules/messages/service.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const messagesRouter = Router();
+const ADMIN_MESSAGE_CONTENT_MAX_LENGTH = 4000;
+
+const adminMessageContentSchema = z
+  .string()
+  .refine(
+    (value) => isMessageContentWithinLimit(value, ADMIN_MESSAGE_CONTENT_MAX_LENGTH),
+    'Message content must be 4,000 characters or fewer.'
+  )
+  .transform(sanitizeMessageContent)
+  .refine((value) => value.length > 0, 'Message content is required.');
 
 const replySchema = z.object({
-  content: z.string().trim().min(1).max(4000),
+  content: adminMessageContentSchema,
   visibleToClient: z.boolean().optional(),
 });
 
 const createThreadSchema = z.object({
   clientId: z.string().trim().min(1).max(96),
   confirmDuplicateGeneral: z.boolean().optional(),
-  content: z.string().trim().min(1).max(4000),
+  content: adminMessageContentSchema,
   matterId: z.string().trim().min(1).max(96).optional(),
 });
 

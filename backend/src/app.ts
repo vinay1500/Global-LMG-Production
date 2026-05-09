@@ -38,7 +38,7 @@ export const createApp = () => {
       origin: env.PUBLIC_WEB_ORIGIN,
     })
   );
-  app.use(express.json({ limit: '1mb', verify: captureWebhookRawBody }));
+  app.use(express.json({ limit: env.API_JSON_BODY_LIMIT, verify: captureWebhookRawBody }));
 
   app.use('/api', apiRouter);
   app.use(sentryErrorHandler());

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import type { PlatformUser } from '../../data/seedData';
+import type { PlatformUser } from '../../data/adminTypes';
 import { PaginationControls } from '../../components/shared/PaginationControls';
 import { WorkspaceState } from '../../components/shared/WorkspaceState';
 import { useAsyncResource } from '../../hooks/useAsyncResource';

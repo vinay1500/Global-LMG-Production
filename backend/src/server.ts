@@ -106,6 +106,17 @@ const bootstrap = async () => {
 
   logEvent(
     'info',
+    `MySQL pool: connectionLimit=${env.MYSQL_CONNECTION_LIMIT}; queueLimit=${env.MYSQL_QUEUE_LIMIT}; waitForConnections=${env.MYSQL_WAIT_FOR_CONNECTIONS}; connectTimeoutMs=${env.MYSQL_CONNECT_TIMEOUT_MS}`,
+    {
+      connectTimeoutMs: env.MYSQL_CONNECT_TIMEOUT_MS,
+      connectionLimit: env.MYSQL_CONNECTION_LIMIT,
+      queueLimit: env.MYSQL_QUEUE_LIMIT,
+      waitForConnections: env.MYSQL_WAIT_FOR_CONNECTIONS,
+    }
+  );
+
+  logEvent(
+    'info',
     `Malware scan: ${env.FILE_SCAN_MODE}; block-until-clean: download=${env.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN} preview=${env.FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN}`,
     {
       blockDownloadUntilClean: env.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN,

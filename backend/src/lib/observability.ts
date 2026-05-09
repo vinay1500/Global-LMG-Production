@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { NextFunction, Request, Response } from 'express';
 import { env } from '../config/env.js';
+import { getRequestIpAddress } from './requestSecurity.js';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -26,16 +27,6 @@ const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 const shouldLog = (level: LogLevel) =>
   LOG_LEVEL_WEIGHT[level] >= LOG_LEVEL_WEIGHT[env.LOG_LEVEL];
-
-export const getRequestIpAddress = (request: Request) => {
-  const forwardedFor = request.header('x-forwarded-for');
-
-  if (forwardedFor) {
-    return forwardedFor.split(',')[0]?.trim() || request.ip;
-  }
-
-  return request.ip;
-};
 
 const getUserAgent = (request: Request) => request.header('user-agent')?.trim() || null;
 

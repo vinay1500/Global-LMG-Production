@@ -1,5 +1,6 @@
 import { env } from '../../../config/env.js';
 import { serviceUnavailable } from '../../../lib/httpErrors.js';
+import { providerFetch } from '../../../lib/providerHttp.js';
 import type {
   DeliveryResult,
   SendSmsCodeInput,
@@ -76,12 +77,15 @@ export const smsAuthProvider = {
         body.set('From', env.TWILIO_FROM_NUMBER || '');
       }
 
-      const response = await fetch(buildMessagesEndpoint(), {
+      const response = await providerFetch(buildMessagesEndpoint(), {
         method: 'POST',
+        operation: 'send_auth_sms',
+        providerCode: 'twilio',
         headers: {
           Authorization: buildAuthHeader(),
           'Content-Type': 'application/x-www-form-urlencoded',
         },
+        safeToRetry: false,
         body,
       });
 
@@ -111,12 +115,15 @@ export const smsAuthProvider = {
       To: input.recipientPhone,
     });
 
-    const response = await fetch(buildVerifyEndpoint(), {
+    const response = await providerFetch(buildVerifyEndpoint(), {
       method: 'POST',
+      operation: 'send_twilio_verify_sms',
+      providerCode: 'twilio',
       headers: {
         Authorization: buildAuthHeader(),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
+      safeToRetry: false,
       body,
     });
 
@@ -173,12 +180,15 @@ export const smsAuthProvider = {
       To: input.recipientPhone,
     });
 
-    const response = await fetch(buildVerifyCheckEndpoint(), {
+    const response = await providerFetch(buildVerifyCheckEndpoint(), {
       method: 'POST',
+      operation: 'check_twilio_verify_code',
+      providerCode: 'twilio',
       headers: {
         Authorization: buildAuthHeader(),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
+      safeToRetry: false,
       body,
     });
 

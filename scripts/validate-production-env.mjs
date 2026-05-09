@@ -26,7 +26,7 @@ Options:
   --admin-env <path>            Admin API env file. Default admin_backend/.env
   --frontend-env <path>         Public frontend env file. Default frontend/.env.production
   --admin-frontend-env <path>   Admin frontend env file. Default admin_frontend/.env.production
-  --strict-providers            Treat disabled email/SMS/Google/storage/scan providers as failures.
+  --strict-providers            Treat disabled email/SMS/Google/storage/scan providers as failures; recommended for public launch.
 
 No secret values are printed.`);
     process.exit(0);
@@ -120,7 +120,49 @@ const has = (env, key) => Boolean(get(env, key));
 const isHttps = (value) => /^https:\/\//i.test(value);
 const isRelativeApi = (value) => value.startsWith('/');
 const providerDisabled = (scope, check, message) =>
-  options.strictProviders ? fail(scope, check, message) : warn(scope, check, message);
+  options.strictProviders
+    ? fail(scope, check, message)
+    : warn(scope, check, `${message} Acceptable for local/staging only unless explicitly documented for launch.`);
+const placeholderSecretPattern =
+  /(^<[^>]+>$|change[-_\s]?this|change[-_\s]?me|development|dev[-_\s]?secret|placeholder|replace[-_\s]?me|example|sample|test[-_\s]?secret|secret[-_\s]?key|password|changeme|generate[-_\s]?(?:different[-_\s]?)?strong|base64url[-_\s]?secret)/i;
+
+const isPlaceholderLikeSecret = (value) => {
+  const trimmed = value.trim();
+
+  if (placeholderSecretPattern.test(trimmed)) {
+    return true;
+  }
+
+  if (new Set(trimmed).size < 12) {
+    return true;
+  }
+
+  if (/^(.)\1+$/.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+};
+
+const validateHttpsOrigin = (scope, key, value) => {
+  if (!isHttps(value)) {
+    fail(scope, key, `${key} must be an https:// origin in production.`);
+    return;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) {
+      fail(scope, key, `${key} must not point to localhost in production.`);
+      return;
+    }
+  } catch {
+    fail(scope, key, `${key} must be a valid HTTPS origin.`);
+    return;
+  }
+
+  pass(scope, key, `${key} is a production HTTPS origin.`);
+};
 
 const validateRequiredFile = (scope, file) => {
   if (!file.exists) {
@@ -141,22 +183,35 @@ const validateCoreApi = (scope, env, originKey) => {
 
   if (!has(env, 'AUTH_SESSION_SECRET') || get(env, 'AUTH_SESSION_SECRET').length < 32) {
     fail(scope, 'AUTH_SESSION_SECRET', 'AUTH_SESSION_SECRET must be a strong 32+ character secret.');
-  } else if (/change-this|development/i.test(get(env, 'AUTH_SESSION_SECRET'))) {
-    fail(scope, 'AUTH_SESSION_SECRET', 'AUTH_SESSION_SECRET still looks like a development placeholder.');
+  } else if (isPlaceholderLikeSecret(get(env, 'AUTH_SESSION_SECRET'))) {
+    fail(scope, 'AUTH_SESSION_SECRET', 'AUTH_SESSION_SECRET still looks placeholder-like or low entropy.');
   } else {
     pass(scope, 'AUTH_SESSION_SECRET', 'AUTH_SESSION_SECRET is present and not a known placeholder.');
   }
 
-  if (!isHttps(get(env, originKey))) {
-    fail(scope, originKey, `${originKey} must be an https:// origin in production.`);
-  } else {
-    pass(scope, originKey, `${originKey} is HTTPS.`);
-  }
+  validateHttpsOrigin(scope, originKey, get(env, originKey));
+
+  pass(scope, 'COOKIE_SECURE', 'Session and CSRF cookies resolve to Secure in production runtime.');
 
   for (const key of ['MYSQL_HOST', 'MYSQL_DATABASE', 'MYSQL_USER', 'MYSQL_PASSWORD']) {
     if (!has(env, key)) {
       fail(scope, key, `${key} is required.`);
     }
+  }
+
+  const mysqlConnectionLimit = Number(get(env, 'MYSQL_CONNECTION_LIMIT') || '0');
+  const mysqlQueueLimit = Number(get(env, 'MYSQL_QUEUE_LIMIT') || '0');
+
+  if (!Number.isInteger(mysqlConnectionLimit) || mysqlConnectionLimit <= 0) {
+    fail(scope, 'MYSQL_CONNECTION_LIMIT', 'MYSQL_CONNECTION_LIMIT must be a positive integer.');
+  } else {
+    pass(scope, 'MYSQL_CONNECTION_LIMIT', 'MYSQL_CONNECTION_LIMIT is configured.');
+  }
+
+  if (!Number.isInteger(mysqlQueueLimit) || mysqlQueueLimit <= 0) {
+    fail(scope, 'MYSQL_QUEUE_LIMIT', 'MYSQL_QUEUE_LIMIT must be a finite positive integer.');
+  } else {
+    pass(scope, 'MYSQL_QUEUE_LIMIT', 'MYSQL_QUEUE_LIMIT is finite.');
   }
 
   if (get(env, 'MYSQL_SSL_MODE').toUpperCase() !== 'REQUIRED') {
@@ -209,7 +264,7 @@ const validateSentry = (scope, env, dsnKey = 'SENTRY_DSN') => {
   }
 
   if (!dsn) {
-    warn(scope, dsnKey, 'Sentry DSN is not configured; runtime error monitoring is disabled.');
+    warn(scope, dsnKey, 'Sentry DSN is not configured; runtime error monitoring is disabled. Must fix before public launch; acceptable for local/staging only.');
     return;
   }
 
@@ -280,6 +335,18 @@ const validatePayments = (scope, env) => {
     fail(scope, 'RAZORPAY_CAPTURE_MODE', 'RAZORPAY_CAPTURE_MODE must be auto or manual.');
   }
 
+  const allowedCurrencies = (get(env, 'RAZORPAY_ALLOWED_CURRENCIES') || 'USD')
+    .split(',')
+    .map((currency) => currency.trim().toUpperCase())
+    .filter(Boolean);
+  if (!allowedCurrencies.includes('USD')) {
+    fail(
+      scope,
+      'RAZORPAY_ALLOWED_CURRENCIES',
+      'RAZORPAY_ALLOWED_CURRENCIES must include USD because client invoices and payment orders are USD.'
+    );
+  }
+
   if (!results.some((result) => result.scope === scope && result.status === 'FAIL' && result.check.startsWith('RAZORPAY'))) {
     pass(scope, 'RAZORPAY', 'Razorpay payment mode has required variables.');
   }
@@ -340,7 +407,11 @@ const validateClientGoogleAuth = (scope, backendEnv, frontendEnv) => {
   }
 
   if (mode === 'disabled') {
-    warn(scope, 'GOOGLE_AUTH_MODE', 'Google client auth is disabled.');
+    providerDisabled(
+      scope,
+      'GOOGLE_AUTH_MODE',
+      'Google client auth is disabled. This is safe only when Google sign-in is not offered in production UI.'
+    );
     return;
   }
 

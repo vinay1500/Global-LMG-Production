@@ -23,8 +23,8 @@ This file maps the database structure used across `backend`, `admin_backend`, `f
 
 ## Current vs Legacy
 
-- Current normalized schema: all tables below except the final Legacy section.
-- Legacy compatibility / snapshot schema: `dashboard_*`, `auth_accounts`, legacy `auth_sessions`, and `stored_uploads` are still defined in older migrations but are not referenced by current runtime services.
+- Current normalized schema: all active tables below.
+- Historical-only / dropped schema: early `dashboard_*`, `auth_accounts`, legacy `auth_sessions`, `auth_flows_legacy_pre_009`, and `stored_uploads` appear only in historical migrations. They were removed from the active schema by migrations `051-drop-dead-legacy-tables` and `052-drop-stored-uploads-if-unused`.
 - Low-usage but defined normalized tables: `security_events`, `subscription_plans`, `subscription_plan_services`, `subscriptions`, `event_reminders`, and `schema_migrations` exist in schema, but current runtime code has little or no direct usage outside migration/bootstrap paths.
 - Important modeling gap: `counsel_partner_expertise` has ID columns that imply relationships to `counsel_partners`, `legal_domains`, and `services`, but no foreign keys are declared in the migration file.
 
@@ -34,7 +34,7 @@ This file maps the database structure used across `backend`, `admin_backend`, `f
 
 #### schema_migrations
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 0
 
 **Columns**
@@ -46,7 +46,7 @@ Runtime references outside migrations: 0
 
 #### business_sequences
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 2 (`backend/src/modules/platform/sequences.ts`, `admin_backend/src/modules/packages/service.ts`)
 
 **Columns**
@@ -66,7 +66,7 @@ Runtime references outside migrations: 2 (`backend/src/modules/platform/sequence
 
 #### users
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 34 (`backend/src/modules/access/repository.ts`, `backend/src/modules/auth/mysqlAuthStore.ts`, `backend/src/modules/clientAccounts/repository.ts`, `backend/src/modules/dashboard/helpers.ts`, `backend/src/modules/dashboard/normalizedRepository.ts`, `backend/src/modules/dashboard/types.ts`, ...)
 
 **Columns**
@@ -80,8 +80,8 @@ Runtime references outside migrations: 34 (`backend/src/modules/access/repositor
 - `last_name` VARCHAR(80) NULL
 - `actor_type_code` VARCHAR(32) NOT NULL
 - `account_status_code` VARCHAR(32) NOT NULL
-- `timezone_name` VARCHAR(64) NOT NULL DEFAULT 'Asia/Kolkata'
-- `locale_code` VARCHAR(16) NOT NULL DEFAULT 'en-IN'
+- `timezone_name` VARCHAR(64) NOT NULL DEFAULT 'UTC'
+- `locale_code` VARCHAR(16) NOT NULL DEFAULT 'en-US'
 - `avatar_url` VARCHAR(500) NULL
 - `login_enabled` TINYINT(1) NOT NULL DEFAULT 1
 - `last_login_at` DATETIME(6) NULL
@@ -101,7 +101,7 @@ Runtime references outside migrations: 34 (`backend/src/modules/access/repositor
 
 #### user_credentials
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 2 (`backend/src/modules/auth/mysqlAuthStore.ts`, `admin_backend/src/modules/auth/service.ts`)
 
 **Columns**
@@ -119,7 +119,7 @@ Runtime references outside migrations: 2 (`backend/src/modules/auth/mysqlAuthSto
 
 #### user_oauth_accounts
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 1 (`backend/src/modules/auth/mysqlAuthStore.ts`)
 
 **Columns**
@@ -143,7 +143,7 @@ Runtime references outside migrations: 1 (`backend/src/modules/auth/mysqlAuthSto
 
 #### user_sessions
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 2 (`backend/src/modules/auth/mysqlAuthStore.ts`, `admin_backend/src/modules/auth/service.ts`)
 
 **Columns**
@@ -174,7 +174,7 @@ Runtime references outside migrations: 2 (`backend/src/modules/auth/mysqlAuthSto
 
 #### email_verification_tokens
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 1 (`backend/src/modules/auth/mysqlAuthStore.ts`)
 
 **Columns**
@@ -292,9 +292,111 @@ Runtime references outside migrations: 1 (`backend/src/modules/auth/mysqlAuthSto
 - [FK] CONSTRAINT fk_auth_flows_phone_token FOREIGN KEY (phone_token_id) REFERENCES phone_verification_tokens (id) ON UPDATE CASCADE ON DELETE SET NULL
 - [FK] CONSTRAINT fk_auth_flows_password_reset_token FOREIGN KEY (password_reset_token_id) REFERENCES password_reset_tokens (id) ON UPDATE CASCADE ON DELETE SET NULL
 
+#### oauth_nonces
+
+Source status: active normalized schema
+Runtime references outside migrations: 1 (`backend/src/modules/auth/oauthNonceStore.ts`)
+Note: this is the active Google ID-token nonce table; the implementation uses the generic OAuth nonce table name.
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `public_id` CHAR(26) NOT NULL
+- `provider_code` VARCHAR(32) NOT NULL
+- `purpose_code` VARCHAR(32) NOT NULL DEFAULT 'sign_in'
+- `nonce_hash` CHAR(64) NOT NULL
+- `expires_at` DATETIME(6) NOT NULL
+- `consumed_at` DATETIME(6) NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_oauth_nonces_public_id (public_id)
+- [UNIQUE] UNIQUE KEY uq_oauth_nonces_provider_nonce (provider_code, nonce_hash)
+- [INDEX] INDEX idx_oauth_nonces_provider_expiry (provider_code, expires_at, consumed_at)
+
+#### idempotency_keys
+
+Source status: active normalized schema
+Runtime references outside migrations: 2 (`backend/src/lib/idempotency.ts`, `admin_backend/src/lib/idempotency.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `scope_code` VARCHAR(96) NOT NULL
+- `idempotency_key_hash` CHAR(64) NOT NULL
+- `actor_key_hash` CHAR(64) NULL
+- `actor_user_id` BIGINT UNSIGNED NULL
+- `request_method` VARCHAR(16) NOT NULL
+- `request_path` VARCHAR(255) NOT NULL
+- `request_fingerprint_hash` CHAR(64) NOT NULL
+- `status_code` VARCHAR(32) NOT NULL DEFAULT 'processing'
+- `response_status_code` SMALLINT UNSIGNED NULL
+- `response_body_json` JSON NULL
+- `locked_until` DATETIME(6) NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_idempotency_scope_key (scope_code, idempotency_key_hash)
+- [INDEX] INDEX idx_idempotency_actor (actor_key_hash, created_at)
+- [INDEX] INDEX idx_idempotency_created_at (created_at)
+- [INDEX] INDEX idx_idempotency_locked_until (locked_until)
+- [FK] CONSTRAINT fk_idempotency_actor_user FOREIGN KEY (actor_user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
+
+#### rate_limit_buckets
+
+Source status: active normalized schema
+Runtime references outside migrations: 2 (`backend/src/modules/auth/persistentRateLimiter.ts`, `admin_backend/src/modules/auth/persistentRateLimiter.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `scope_code` VARCHAR(48) NOT NULL
+- `bucket_key_hash` CHAR(64) NOT NULL
+- `attempt_count` INT UNSIGNED NOT NULL DEFAULT 0
+- `window_started_at` DATETIME(6) NOT NULL
+- `window_resets_at` DATETIME(6) NOT NULL
+- `blocked_until` DATETIME(6) NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_rate_limit_bucket (scope_code, bucket_key_hash)
+- [INDEX] INDEX idx_rate_limit_reset (window_resets_at)
+- [INDEX] INDEX idx_rate_limit_blocked_until (blocked_until)
+
+#### admin_mfa_secrets
+
+Source status: active normalized schema
+Runtime references outside migrations: 1 (`admin_backend/src/modules/auth/mfa.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `user_id` BIGINT UNSIGNED NOT NULL
+- `secret_encrypted` TEXT NOT NULL
+- `enabled_at` DATETIME(6) NULL
+- `recovery_codes_hash_json` JSON NULL
+- `last_verified_at` DATETIME(6) NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_admin_mfa_user (user_id)
+- [FK] CONSTRAINT fk_admin_mfa_user FOREIGN KEY (user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE CASCADE
+
 #### security_events
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 0
 
 **Columns**
@@ -319,7 +421,7 @@ Runtime references outside migrations: 0
 
 #### user_legal_acceptances
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 1 (`backend/src/modules/auth/mysqlAuthStore.ts`)
 
 **Columns**
@@ -346,7 +448,7 @@ Runtime references outside migrations: 1 (`backend/src/modules/auth/mysqlAuthSto
 
 #### roles
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 10 (`backend/src/modules/access/repository.ts`, `backend/src/modules/domain/repository.ts`, `backend/src/modules/platform/bootstrap.ts`, `backend/src/modules/platform/referenceData.ts`, `backend/src/routes/admin.ts`, `admin_backend/src/modules/dashboard/service.ts`, ...)
 
 **Columns**
@@ -365,7 +467,7 @@ Runtime references outside migrations: 10 (`backend/src/modules/access/repositor
 
 #### permissions
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 8 (`backend/src/modules/access/repository.ts`, `backend/src/modules/domain/repository.ts`, `backend/src/modules/platform/bootstrap.ts`, `backend/src/modules/platform/referenceData.ts`, `backend/src/routes/admin.ts`, `admin_backend/src/modules/rbac/service.ts`, ...)
 
 **Columns**
@@ -383,7 +485,7 @@ Runtime references outside migrations: 8 (`backend/src/modules/access/repository
 
 #### role_permissions
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 4 (`backend/src/modules/access/repository.ts`, `backend/src/modules/platform/bootstrap.ts`, `admin_backend/src/modules/auth/service.ts`, `admin_backend/src/modules/rbac/service.ts`)
 
 **Columns**
@@ -400,7 +502,7 @@ Runtime references outside migrations: 4 (`backend/src/modules/access/repository
 
 #### user_roles
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 6 (`backend/src/modules/access/repository.ts`, `backend/src/modules/auth/mysqlAuthStore.ts`, `backend/src/modules/domain/repository.ts`, `admin_backend/src/modules/auth/service.ts`, `admin_backend/src/modules/matters/service.ts`, `admin_backend/src/modules/rbac/service.ts`)
 
 **Columns**
@@ -425,7 +527,7 @@ Runtime references outside migrations: 6 (`backend/src/modules/access/repository
 
 #### staff_profiles
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 1 (`backend/src/modules/dashboard/normalizedRepository.ts`)
 
 **Columns**
@@ -448,7 +550,7 @@ Runtime references outside migrations: 1 (`backend/src/modules/dashboard/normali
 
 #### client_accounts
 
-Source status: active normalized schema  
+Source status: active normalized schema
 Runtime references outside migrations: 13 (`backend/src/modules/auth/mysqlAuthStore.ts`, `backend/src/modules/dashboard/normalizedRepository.ts`, `backend/src/modules/domain/repository.ts`, `backend/src/modules/storage/mysqlStoredUploadRepository.ts`, `backend/src/modules/storage/service.ts`, `admin_backend/src/modules/audit/service.ts`, ...)
 
 **Columns**
@@ -462,7 +564,7 @@ Runtime references outside migrations: 13 (`backend/src/modules/auth/mysqlAuthSt
 - `billing_name` VARCHAR(200) NOT NULL
 - `primary_email` VARCHAR(255) NOT NULL
 - `primary_phone` VARCHAR(40) NOT NULL
-- `gstin` VARCHAR(24) NULL
+- `gstin` CHAR(15) NULL
 - `tax_identifier` VARCHAR(64) NULL
 - `onboarding_status_code` VARCHAR(32) NOT NULL
 - `account_status_code` VARCHAR(32) NOT NULL
@@ -907,6 +1009,30 @@ Runtime references outside migrations: 1 (`backend/src/modules/platform/bootstra
 - [PK] PRIMARY KEY (id)
 - [UNIQUE] UNIQUE KEY uq_tax_rates_code (tax_code)
 - [CHECK] CONSTRAINT chk_tax_rates_percent CHECK (rate_percent >= 0 AND rate_percent <= 100)
+
+#### exchange_rates
+
+Source status: active normalized schema
+Runtime references outside migrations: 2 (`backend/src/modules/pricing/fx.ts`, `admin_backend/src/modules/pricing/fx.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `base_currency` CHAR(3) NOT NULL
+- `quote_currency` CHAR(3) NOT NULL
+- `rate` DECIMAL(20,8) NOT NULL
+- `rate_date` DATE NOT NULL
+- `provider` VARCHAR(64) NOT NULL DEFAULT 'manual'
+- `fetched_at` DATETIME(6) NOT NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_exchange_rates_pair_date_provider (base_currency, quote_currency, rate_date, provider)
+- [INDEX] INDEX idx_exchange_rates_lookup (base_currency, quote_currency, rate_date)
+- [CHECK] CONSTRAINT chk_exchange_rates_rate CHECK (rate > 0)
 
 #### subscription_plans
 
@@ -1555,7 +1681,7 @@ Runtime references outside migrations: 43 (`backend/src/modules/dashboard/helper
 - `status_code` VARCHAR(32) NOT NULL
 - `scheduled_start_at` DATETIME(6) NOT NULL
 - `scheduled_end_at` DATETIME(6) NOT NULL
-- `timezone_name` VARCHAR(64) NOT NULL DEFAULT 'Asia/Kolkata'
+- `timezone_name` VARCHAR(64) NOT NULL DEFAULT 'UTC'
 - `mode_code` VARCHAR(32) NOT NULL
 - `location_text` VARCHAR(255) NULL
 - `meeting_provider_code` VARCHAR(32) NOT NULL
@@ -1842,6 +1968,74 @@ Runtime references outside migrations: 0
 - [FK] CONSTRAINT fk_subscriptions_payment_method FOREIGN KEY (payment_method_id) REFERENCES payment_methods (id) ON UPDATE CASCADE ON DELETE SET NULL
 - [FK] CONSTRAINT fk_subscriptions_created_by FOREIGN KEY (created_by_user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE RESTRICT
 
+#### invoice_settings
+
+Source status: active normalized schema
+Runtime references outside migrations: 3 (`admin_backend/src/modules/settings/invoiceSettings.ts`, `backend/src/modules/domain/invoiceTemplateRendering.ts`, `admin_backend/src/modules/billing/invoiceTemplateRendering.ts`)
+
+**Columns**
+
+- `id` TINYINT UNSIGNED NOT NULL
+- `business_legal_name` VARCHAR(200) NOT NULL
+- `billing_display_name` VARCHAR(200) NOT NULL
+- `gstin` CHAR(15) NULL
+- `business_state` VARCHAR(100) NOT NULL
+- `business_address` TEXT NULL
+- `business_phone` VARCHAR(40) NULL
+- `business_email` VARCHAR(255) NULL
+- `business_website` VARCHAR(255) NULL
+- `invoice_prefix` VARCHAR(24) NOT NULL
+- `default_sac_code` VARCHAR(32) NULL
+- `gst_enabled` TINYINT(1) NOT NULL DEFAULT 1
+- `default_gst_rate_bps` INT UNSIGNED NOT NULL DEFAULT 1800
+- `tax_mode_code` VARCHAR(32) NOT NULL DEFAULT 'forward_charge'
+- `prices_include_tax` TINYINT(1) NOT NULL DEFAULT 0
+- `fallback_tax_type_code` VARCHAR(32) NOT NULL DEFAULT 'igst'
+- `payment_terms_days` INT UNSIGNED NOT NULL DEFAULT 7
+- `payment_instructions` TEXT NULL
+- `invoice_terms` TEXT NULL
+- `invoice_footer` TEXT NULL
+- `reverse_charge_note` TEXT NULL
+- `default_invoice_template_public_id` CHAR(26) NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+- `row_version` BIGINT UNSIGNED NOT NULL DEFAULT 1
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+
+#### invoice_pdf_templates
+
+Source status: active normalized schema
+Runtime references outside migrations: 2 (`backend/src/lib/invoicePdf.ts`, `admin_backend/src/modules/billing/invoicePdf.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `public_id` CHAR(26) NOT NULL
+- `name` VARCHAR(180) NOT NULL
+- `original_file_name` VARCHAR(255) NOT NULL
+- `content_type` VARCHAR(80) NOT NULL DEFAULT 'application/pdf'
+- `file_size_bytes` BIGINT UNSIGNED NOT NULL
+- `pdf_content` LONGBLOB NOT NULL
+- `content_top_margin` DECIMAL(10,2) NOT NULL DEFAULT 120.00
+- `content_left_margin` DECIMAL(10,2) NOT NULL DEFAULT 54.00
+- `content_right_margin` DECIMAL(10,2) NOT NULL DEFAULT 54.00
+- `content_bottom_margin` DECIMAL(10,2) NOT NULL DEFAULT 72.00
+- `is_active` TINYINT(1) NOT NULL DEFAULT 0
+- `created_by_user_id` BIGINT UNSIGNED NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+- `archived_at` DATETIME(6) NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_invoice_pdf_templates_public_id (public_id)
+- [INDEX] INDEX idx_invoice_pdf_templates_active (is_active, archived_at)
+- [FK] CONSTRAINT fk_invoice_pdf_templates_created_by FOREIGN KEY (created_by_user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
+
 #### invoices
 
 Source status: active normalized schema  
@@ -1854,10 +2048,19 @@ Runtime references outside migrations: 37 (`backend/src/modules/dashboard/helper
 - `invoice_number` VARCHAR(50) NOT NULL
 - `client_account_id` BIGINT UNSIGNED NOT NULL
 - `matter_id` BIGINT UNSIGNED NULL
+- `matter_package_id` BIGINT UNSIGNED NULL
 - `subscription_id` BIGINT UNSIGNED NULL
 - `invoice_type_code` VARCHAR(32) NOT NULL
 - `status_code` VARCHAR(32) NOT NULL
 - `currency_code` CHAR(3) NOT NULL DEFAULT 'USD'
+- `original_currency_code` CHAR(3) NULL
+- `original_subtotal_amount` DECIMAL(14,2) NULL
+- `original_tax_amount` DECIMAL(14,2) NULL
+- `original_total_amount` DECIMAL(14,2) NULL
+- `exchange_rate` DECIMAL(20,8) NULL
+- `exchange_rate_date` DATE NULL
+- `exchange_rate_provider` VARCHAR(64) NULL
+- `fx_snapshot_json` JSON NULL
 - `issue_date` DATE NOT NULL
 - `due_date` DATE NOT NULL
 - `subtotal_amount` DECIMAL(14,2) NOT NULL
@@ -1871,8 +2074,27 @@ Runtime references outside migrations: 37 (`backend/src/modules/dashboard/helper
 - `created_at` DATETIME(6) NOT NULL
 - `updated_at` DATETIME(6) NOT NULL
 - `archived_at` DATETIME(6) NULL
+- `template_public_id_snapshot` CHAR(26) NULL
+- `template_version_snapshot` INT UNSIGNED NULL
+- `pdf_template_public_id_snapshot` CHAR(26) NULL
+- `pdf_template_name_snapshot` VARCHAR(180) NULL
+- `pdf_content_top_margin_snapshot` DECIMAL(10,2) NULL
+- `pdf_content_left_margin_snapshot` DECIMAL(10,2) NULL
+- `pdf_content_right_margin_snapshot` DECIMAL(10,2) NULL
+- `pdf_content_bottom_margin_snapshot` DECIMAL(10,2) NULL
+- `rendered_subject_snapshot` VARCHAR(255) NULL
+- `rendered_body_snapshot` TEXT NULL
+- `rendered_terms_snapshot` TEXT NULL
+- `rendered_footer_snapshot` TEXT NULL
+- `business_name_snapshot` VARCHAR(255) NULL
+- `business_address_snapshot` TEXT NULL
+- `business_phone_snapshot` VARCHAR(40) NULL
+- `business_email_snapshot` VARCHAR(255) NULL
+- `business_website_snapshot` VARCHAR(255) NULL
+- `business_gstin_snapshot` CHAR(15) NULL
+- `business_state_snapshot` VARCHAR(96) NULL
+- `payment_instructions_snapshot` TEXT NULL
 - `row_version` BIGINT UNSIGNED NOT NULL DEFAULT 1
-- `matter_package_id` BIGINT UNSIGNED NULL
 
 **Keys / Constraints**
 
@@ -1907,7 +2129,7 @@ Runtime references outside migrations: 3 (`backend/src/modules/dashboard/normali
 - `state` VARCHAR(100) NOT NULL
 - `postal_code` VARCHAR(20) NOT NULL
 - `country_code` VARCHAR(16) NOT NULL
-- `gstin` VARCHAR(24) NULL
+- `gstin` CHAR(15) NULL
 - `created_at` DATETIME(6) NOT NULL
 
 **Keys / Constraints**
@@ -2038,6 +2260,73 @@ Runtime references outside migrations: 9 (`backend/src/modules/dashboard/normali
 - [FK] CONSTRAINT fk_payment_transactions_created_by FOREIGN KEY (created_by_user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
 - [CHECK] CONSTRAINT chk_payment_transactions_amounts CHECK ( gross_amount >= 0 AND gateway_fee_amount >= 0 AND net_amount >= 0 )
 
+#### payment_gateway_orders
+
+Source status: active normalized schema
+Runtime references outside migrations: 1 (`backend/src/modules/payments/razorpayService.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `public_id` CHAR(26) NOT NULL
+- `provider_code` VARCHAR(32) NOT NULL
+- `provider_order_id` VARCHAR(120) NOT NULL
+- `invoice_id` BIGINT UNSIGNED NULL
+- `service_request_id` BIGINT UNSIGNED NULL
+- `client_account_id` BIGINT UNSIGNED NOT NULL
+- `amount` DECIMAL(14,2) NOT NULL
+- `amount_minor` BIGINT UNSIGNED NOT NULL
+- `currency_code` CHAR(3) NOT NULL DEFAULT 'USD'
+- `status_code` VARCHAR(32) NOT NULL
+- `receipt` VARCHAR(40) NOT NULL
+- `idempotency_key_hash` CHAR(64) NULL
+- `provider_payload_json` JSON NULL
+- `created_by_user_id` BIGINT UNSIGNED NULL
+- `created_at` DATETIME(6) NOT NULL
+- `updated_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_payment_gateway_orders_public_id (public_id)
+- [UNIQUE] UNIQUE KEY uq_payment_gateway_orders_provider_order (provider_code, provider_order_id)
+- [INDEX] INDEX idx_payment_gateway_orders_invoice (invoice_id)
+- [INDEX] INDEX idx_payment_gateway_orders_service_request (service_request_id)
+- [INDEX] INDEX idx_payment_gateway_orders_client (client_account_id)
+- [FK] CONSTRAINT fk_payment_gateway_orders_invoice FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON UPDATE CASCADE ON DELETE SET NULL
+- [FK] CONSTRAINT fk_payment_gateway_orders_service_request FOREIGN KEY (service_request_id) REFERENCES service_requests (id) ON UPDATE CASCADE ON DELETE SET NULL
+- [FK] CONSTRAINT fk_payment_gateway_orders_client FOREIGN KEY (client_account_id) REFERENCES client_accounts (id) ON UPDATE CASCADE ON DELETE RESTRICT
+- [FK] CONSTRAINT fk_payment_gateway_orders_created_by FOREIGN KEY (created_by_user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
+
+#### payment_gateway_events
+
+Source status: active normalized schema
+Runtime references outside migrations: 2 (`backend/src/routes/webhooks.ts`, `backend/src/modules/payments/razorpayService.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `public_id` CHAR(26) NOT NULL
+- `provider_code` VARCHAR(32) NOT NULL
+- `event_type` VARCHAR(120) NOT NULL
+- `provider_event_id` VARCHAR(160) NOT NULL
+- `signature_valid` TINYINT(1) NOT NULL DEFAULT 0
+- `provider_order_id` VARCHAR(120) NULL
+- `provider_payment_id` VARCHAR(120) NULL
+- `payload_json` JSON NOT NULL
+- `received_at` DATETIME(6) NOT NULL
+- `processed_at` DATETIME(6) NULL
+- `created_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_payment_gateway_events_public_id (public_id)
+- [UNIQUE] UNIQUE KEY uq_payment_gateway_events_provider_event (provider_code, provider_event_id)
+- [INDEX] INDEX idx_payment_gateway_events_order (provider_order_id)
+- [INDEX] INDEX idx_payment_gateway_events_payment (provider_payment_id)
+- [INDEX] INDEX idx_payment_gateway_events_received (received_at)
+
 #### payment_allocations
 
 Source status: active normalized schema  
@@ -2096,6 +2385,61 @@ Runtime references outside migrations: 13 (`backend/src/modules/domain/repositor
 - [CHECK] CONSTRAINT chk_refunds_amount CHECK (amount > 0)
 
 ### Notifications & Audit
+
+#### email_events
+
+Source status: active normalized schema
+Runtime references outside migrations: 1 (`admin_backend/src/modules/webhooks/providerWebhooks.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `public_id` CHAR(26) NOT NULL
+- `provider_code` VARCHAR(32) NOT NULL
+- `provider_event_id` VARCHAR(160) NULL
+- `provider_message_id` VARCHAR(160) NULL
+- `event_type_code` VARCHAR(80) NOT NULL
+- `delivery_status_code` VARCHAR(40) NOT NULL
+- `recipient_email` VARCHAR(255) NULL
+- `payload_json` JSON NULL
+- `received_at` DATETIME(6) NOT NULL
+- `created_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_email_events_public_id (public_id)
+- [UNIQUE] UNIQUE KEY uq_email_events_provider_event (provider_code, provider_event_id)
+- [INDEX] INDEX idx_email_events_provider_message (provider_code, provider_message_id)
+- [INDEX] INDEX idx_email_events_received_at (received_at)
+
+#### sms_events
+
+Source status: active normalized schema
+Runtime references outside migrations: 1 (`admin_backend/src/modules/webhooks/providerWebhooks.ts`)
+
+**Columns**
+
+- `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+- `public_id` CHAR(26) NOT NULL
+- `provider_code` VARCHAR(32) NOT NULL
+- `provider_message_id` VARCHAR(160) NULL
+- `event_type_code` VARCHAR(80) NOT NULL
+- `delivery_status_code` VARCHAR(40) NOT NULL
+- `to_phone` VARCHAR(64) NULL
+- `from_phone` VARCHAR(64) NULL
+- `error_code` VARCHAR(64) NULL
+- `error_message` VARCHAR(255) NULL
+- `payload_json` JSON NULL
+- `received_at` DATETIME(6) NOT NULL
+- `created_at` DATETIME(6) NOT NULL
+
+**Keys / Constraints**
+
+- [PK] PRIMARY KEY (id)
+- [UNIQUE] UNIQUE KEY uq_sms_events_public_id (public_id)
+- [UNIQUE] UNIQUE KEY uq_sms_events_provider_message_type (provider_code, provider_message_id, event_type_code)
+- [INDEX] INDEX idx_sms_events_received_at (received_at)
 
 #### notifications
 
@@ -2185,316 +2529,19 @@ Runtime references outside migrations: 1 (`admin_backend/src/modules/writeSuppor
 - [INDEX] INDEX idx_audit_event_changes_event (audit_event_id)
 - [FK] CONSTRAINT fk_audit_event_changes_event FOREIGN KEY (audit_event_id) REFERENCES audit_events (id) ON UPDATE CASCADE ON DELETE CASCADE
 
-### Legacy / Snapshot Schema
-
-#### auth_accounts
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `email` VARCHAR(255) NOT NULL
-- `phone` VARCHAR(64) NULL
-- `provider` VARCHAR(32) NOT NULL
-- `created_at` DATETIME(3) NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-
-**Keys / Constraints**
-
-- [UNIQUE] UNIQUE KEY uq_auth_accounts_email (email)
-- [UNIQUE] UNIQUE KEY uq_auth_accounts_phone (phone)
-
-#### auth_sessions
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `hashed_token` CHAR(64) PRIMARY KEY
-- `account_id` VARCHAR(128) NOT NULL
-- `remember_me` TINYINT(1) NOT NULL
-- `created_at` DATETIME(3) NOT NULL
-- `expires_at` DATETIME(3) NOT NULL
-- `last_seen_at` DATETIME(3) NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_auth_sessions_account (account_id)
-- [INDEX] INDEX idx_auth_sessions_expires (expires_at)
-
-#### dashboard_audit_entries
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `entity_type` VARCHAR(64) NOT NULL
-- `entity_id` VARCHAR(128) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_audit_client (client_id)
-- [INDEX] INDEX idx_dashboard_audit_sort (client_id, sort_timestamp)
-
-#### dashboard_documents
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `matter_id` VARCHAR(128) NOT NULL
-- `visibility` VARCHAR(32) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_documents_client (client_id)
-- [INDEX] INDEX idx_dashboard_documents_sort (client_id, sort_timestamp)
-
-#### dashboard_events
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `matter_id` VARCHAR(128) NOT NULL
-- `status` VARCHAR(32) NOT NULL
-- `event_date` DATE NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_events_client (client_id)
-- [INDEX] INDEX idx_dashboard_events_sort (client_id, event_date, sort_timestamp)
-
-#### dashboard_invoices
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `matter_id` VARCHAR(128) NOT NULL
-- `status` VARCHAR(64) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_invoices_client (client_id)
-- [INDEX] INDEX idx_dashboard_invoices_sort (client_id, sort_timestamp)
-
-#### dashboard_leads
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `status` VARCHAR(64) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_leads_client (client_id)
-- [INDEX] INDEX idx_dashboard_leads_sort (client_id, sort_timestamp)
-
-#### dashboard_matter_packages
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `matter_id` VARCHAR(128) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_packages_client (client_id)
-- [INDEX] INDEX idx_dashboard_packages_matter (matter_id)
-
-#### dashboard_matters
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `lifecycle_stage` VARCHAR(64) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_matters_client (client_id)
-- [INDEX] INDEX idx_dashboard_matters_sort (client_id, sort_timestamp)
-
-#### dashboard_message_threads
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `matter_id` VARCHAR(128) NOT NULL
-- `status` VARCHAR(32) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_threads_client (client_id)
-- [INDEX] INDEX idx_dashboard_threads_sort (client_id, sort_timestamp)
-
-#### dashboard_messages
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `thread_id` VARCHAR(128) NOT NULL
-- `sender_role` VARCHAR(32) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_messages_client (client_id)
-- [INDEX] INDEX idx_dashboard_messages_thread (thread_id)
-- [INDEX] INDEX idx_dashboard_messages_sort (client_id, sort_timestamp)
-
-#### dashboard_payments
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `client_id` VARCHAR(128) NOT NULL
-- `invoice_id` VARCHAR(128) NOT NULL
-- `matter_id` VARCHAR(128) NOT NULL
-- `sort_timestamp` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-**Keys / Constraints**
-
-- [INDEX] INDEX idx_dashboard_payments_client (client_id)
-- [INDEX] INDEX idx_dashboard_payments_sort (client_id, sort_timestamp)
-
-#### dashboard_reference_advocates
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-#### dashboard_reference_staff
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `payload` JSON NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-
-#### dashboard_users
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `email` VARCHAR(255) NOT NULL
-- `updated_at` DATETIME(3) NOT NULL
-- `payload` JSON NOT NULL
-
-#### stored_uploads
-
-Source status: legacy / compatibility schema  
-Runtime references outside migrations: 0
-
-**Columns**
-
-- `id` VARCHAR(128) PRIMARY KEY
-- `owner_account_id` VARCHAR(128) NOT NULL
-- `source_module` VARCHAR(64) NOT NULL
-- `related_entity_type` VARCHAR(64) NULL
-- `related_entity_id` VARCHAR(128) NULL
-- `storage_driver` VARCHAR(32) NOT NULL
-- `storage_key` VARCHAR(255) NOT NULL
-- `original_name` VARCHAR(255) NOT NULL
-- `mime_type` VARCHAR(160) NOT NULL
-- `size_bytes` BIGINT NOT NULL
-- `checksum_sha256` CHAR(64) NOT NULL
-- `status` VARCHAR(32) NOT NULL
-- `created_at` DATETIME(3) NOT NULL
-- `finalized_at` DATETIME(3) NULL
-- `payload` JSON NOT NULL
-
-**Keys / Constraints**
-
-- [UNIQUE] UNIQUE KEY uq_stored_uploads_storage_key (storage_key)
-- [INDEX] INDEX idx_stored_uploads_owner (owner_account_id)
-- [INDEX] INDEX idx_stored_uploads_entity (related_entity_type, related_entity_id)
-- [INDEX] INDEX idx_stored_uploads_status (status)
+### Historical Migration-Only Tables
+
+The early `dashboard_*`, `auth_accounts`, legacy `auth_sessions`,
+`auth_flows_legacy_pre_009`, and `stored_uploads` tables are not part of the
+active schema. They remain visible only in historical migration source so old
+environments can be upgraded safely, and were dropped by cleanup migrations
+`051-drop-dead-legacy-tables` and `052-drop-stored-uploads-if-unused`.
 
 ## Foreign-Key Relationship Map
 
 - `audit_event_changes.audit_event_id -> audit_events.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
 - `audit_events.actor_user_id -> users.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
+- `admin_mfa_secrets.user_id -> users.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
 - `auth_flows.email_token_id -> email_verification_tokens.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `auth_flows.password_reset_token_id -> password_reset_tokens.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `auth_flows.phone_token_id -> phone_verification_tokens.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
@@ -2535,7 +2582,9 @@ Runtime references outside migrations: 0
 - `invoice_billing_snapshots.invoice_id -> invoices.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
 - `invoice_documents.document_id -> documents.id` (ON UPDATE CASCADE, ON DELETE RESTRICT)
 - `invoice_documents.invoice_id -> invoices.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
+- `idempotency_keys.actor_user_id -> users.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `invoice_installments.invoice_id -> invoices.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
+- `invoice_pdf_templates.created_by_user_id -> users.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `invoice_line_taxes.invoice_line_id -> invoice_lines.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
 - `invoice_line_taxes.tax_rate_id -> tax_rates.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `invoice_lines.invoice_id -> invoices.id` (ON UPDATE CASCADE, ON DELETE CASCADE)
@@ -2595,6 +2644,10 @@ Runtime references outside migrations: 0
 - `payment_allocations.payment_transaction_id -> payment_transactions.id` (ON UPDATE CASCADE, ON DELETE RESTRICT)
 - `payment_methods.added_by_user_id -> users.id` (ON UPDATE CASCADE, ON DELETE RESTRICT)
 - `payment_methods.client_account_id -> client_accounts.id` (ON UPDATE CASCADE, ON DELETE RESTRICT)
+- `payment_gateway_orders.client_account_id -> client_accounts.id` (ON UPDATE CASCADE, ON DELETE RESTRICT)
+- `payment_gateway_orders.created_by_user_id -> users.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
+- `payment_gateway_orders.invoice_id -> invoices.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
+- `payment_gateway_orders.service_request_id -> service_requests.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `payment_transactions.client_account_id -> client_accounts.id` (ON UPDATE CASCADE, ON DELETE RESTRICT)
 - `payment_transactions.created_by_user_id -> users.id` (ON UPDATE CASCADE, ON DELETE SET NULL)
 - `payment_transactions.payment_method_id -> payment_methods.id` (ON UPDATE CASCADE, ON DELETE SET NULL)

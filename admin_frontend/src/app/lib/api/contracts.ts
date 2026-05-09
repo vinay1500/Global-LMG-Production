@@ -9,7 +9,7 @@ import type {
   PlatformUser,
   MessageThread,
   SystemNotification,
-} from '../../data/seedData';
+} from '../../data/adminTypes';
 
 export interface ApiErrorResponse {
   error: string;
@@ -30,8 +30,25 @@ export interface AdminSessionUser {
 
 export interface AdminSessionResponse {
   authenticated: boolean;
-  csrfToken: string | null;
+  message?: string;
+  mfaRequired?: boolean;
+  mfaToken?: string;
   user: AdminSessionUser | null;
+}
+
+export interface AdminMfaEnrollmentStartResponse {
+  provisioningUri: string;
+  qrCodeDataUrl: string;
+  status: 'mfa_enrollment_started';
+}
+
+export interface AdminMfaEnrollmentVerifyResponse {
+  recoveryCodes: string[];
+  status: 'mfa_enabled';
+}
+
+export interface AdminMfaDisableResponse {
+  status: 'mfa_disabled';
 }
 
 export interface AdminPasswordChangeResponse {
@@ -88,6 +105,11 @@ export interface AdminAccountPreferences {
 export interface AdminAccountResponse {
   preferences: AdminAccountPreferences;
   profile: AdminAccountProfile;
+  security: {
+    mfaEnabled: boolean;
+    mfaEnabledAt: string | null;
+    mfaRequirementMode: 'enforce' | 'off' | 'warn';
+  };
 }
 
 export interface UpdateAdminProfilePayload {
@@ -128,7 +150,7 @@ export interface ClientsListResponse {
 
 export interface CreateClientPayload {
   city?: string;
-  clientType?: 'individual' | 'organization';
+  clientType?: 'business' | 'individual' | 'organization';
   displayName: string;
   email: string;
   notes?: string;

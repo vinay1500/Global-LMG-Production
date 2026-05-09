@@ -4,7 +4,7 @@ import {
   CheckCircle, Briefcase, User, MoreVertical, ChevronDown, 
   ArrowDownToLine, ArrowUpToLine, DollarSign, Calendar, Loader2
 } from 'lucide-react';
-import type { Matter, PlatformUser } from '../data/seedData';
+import type { Matter, PlatformUser } from '../data/adminTypes';
 import { StatusBadge, UrgencyDot } from '../components/dashboard/StatusBadge';
 import { EmptyState } from './EmptyState';
 import type { CreateMatterPayload, CreateMatterResponse, MatterCreateOptions } from '../lib/api/contracts';

@@ -98,6 +98,7 @@ export interface Lead {
   userId: string;
   status:
     | 'new-lead'
+    | 'submitted'
     | 'awaiting-verification'
     | 'consultation-scheduled'
     | 'consultation-completed'

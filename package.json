@@ -1,10 +1,22 @@
 {
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20 <21",
+    "npm": ">=10"
+  },
   "scripts": {
     "build:all": "npm --prefix backend run build && npm --prefix admin_backend run build && npm --prefix frontend run build && npm --prefix admin_frontend run build",
-    "check:all": "npm --prefix backend run typecheck && npm --prefix admin_backend run typecheck && npm --prefix frontend run typecheck && npm --prefix admin_frontend run typecheck && npm test && npm run test:e2e && npm run build:all",
+    "check:all": "npm --prefix backend run typecheck && npm --prefix admin_backend run typecheck && npm --prefix frontend run typecheck && npm --prefix admin_frontend run typecheck && npm test && npm --prefix frontend run test && npm --prefix admin_frontend run test && npm run test:e2e && npm run build:all",
+    "cleanup:retention": "npm --prefix backend run cleanup:retention",
+    "documents:expire-pending-scans": "npm --prefix backend run documents:expire-pending-scans",
     "fx:refresh": "npm --prefix backend run fx:refresh",
+    "reminders:process": "npm --prefix admin_backend run reminders:process",
+    "requests:expire-payment-drafts": "npm --prefix backend run requests:expire-payment-drafts",
+    "retention:cleanup": "npm --prefix backend run retention:cleanup",
+    "uploads:cleanup-expired": "npm --prefix backend run uploads:cleanup-expired",
+    "lint": "eslint backend/src admin_backend/src frontend/src admin_frontend/src scripts tests --cache --cache-location .eslintcache",
+    "lint:all": "npm run lint",
     "smoke:auth-security": "node scripts/auth-security-smoke.mjs",
     "smoke:admin-password-reset": "npm --prefix admin_backend run smoke:password-reset",
     "smoke:beta": "node scripts/beta-smoke.mjs",
@@ -20,9 +32,14 @@
     "validate:production-env": "node scripts/validate-production-env.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
     "pdf-lib": "^1.17.1",
     "playwright": "^1.59.1",
+    "typescript-eslint": "^8.59.2",
     "vitest": "^4.1.5"
   }
 }

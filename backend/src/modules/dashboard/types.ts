@@ -79,6 +79,7 @@ export interface Lead {
   selectedServices: string[];
   status:
     | 'new-lead'
+    | 'submitted'
     | 'awaiting-verification'
     | 'consultation-scheduled'
     | 'consultation-completed'
@@ -349,6 +350,7 @@ export interface RequestPricingConfig {
     id: string;
     name: string;
   }>;
+  showApproximateLocalCurrency: boolean;
   services: Array<{
     baseFee: number;
     description: string;

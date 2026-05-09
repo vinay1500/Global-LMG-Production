@@ -13,6 +13,8 @@ const postJson = <TResponse>(url: string, payload?: unknown) =>
 
 export const authApi = {
   getSession: () => apiRequest<AuthSessionResponse>(API_ENDPOINTS.auth.session()),
+  issueGoogleNonce: () =>
+    postJson<{ expiresAt: string; nonce: string }>(API_ENDPOINTS.auth.googleNonce()),
   signIn: (payload: { identifier: string; password: string; rememberMe: boolean }) =>
     postJson<AuthActionResponse>(API_ENDPOINTS.auth.signIn(), payload),
   signUp: (payload: {
@@ -34,7 +36,7 @@ export const authApi = {
     password: string;
     phone: string;
   }) => postJson<AuthActionResponse>(API_ENDPOINTS.auth.signUp(), payload),
-  signInWithGoogle: (payload: { credential?: string; rememberMe: boolean }) =>
+  signInWithGoogle: (payload: { credential?: string; nonce: string; rememberMe: boolean }) =>
     postJson<AuthActionResponse>(API_ENDPOINTS.auth.google(), payload),
   verifyEmail: (payload: { code: string }) =>
     postJson<AuthActionResponse>(API_ENDPOINTS.auth.verifyEmail(), payload),

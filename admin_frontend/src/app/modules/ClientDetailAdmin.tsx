@@ -15,7 +15,7 @@ import type {
   PlatformEvent,
   PlatformUser,
   SystemNotification,
-} from '../data/seedData';
+} from '../data/adminTypes';
 import { StatusBadge, UrgencyDot } from '../components/dashboard/StatusBadge';
 import { EmptyState } from './EmptyState';
 import type { AdminRequestRecord, ClientWorkspaceResponse } from '../lib/api/contracts';
@@ -95,7 +95,7 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
           <button
             className="cursor-not-allowed rounded-lg border border-dashed border-gray-200 px-4 py-2 text-sm text-gray-400"
             disabled
-            title="Profile editing is coming in the setup phase."
+            title="Profile editing is managed from account settings."
             type="button"
           >
             Edit Profile
@@ -108,7 +108,7 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
             }`}
             disabled={!onCreateMatter}
             onClick={onCreateMatter}
-            title={onCreateMatter ? 'Create a new matter for this client.' : 'New Matter creation is coming in the setup phase.'}
+            title={onCreateMatter ? 'Create a new matter for this client.' : 'New matter creation is unavailable in this workspace.'}
             type="button"
           >
             New Matter

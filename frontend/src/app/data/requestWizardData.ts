@@ -64,6 +64,7 @@ export interface RequestWizardPricingConfig {
   detectedCountryCode?: string;
   detectedCurrency?: string;
   legalDomains: LegalDomainOption[];
+  showApproximateLocalCurrency: boolean;
   services: RequestWizardService[];
   urgencyOptions: RequestWizardUrgencyOption[];
 }
@@ -195,6 +196,7 @@ export const DEFAULT_REQUEST_PRICING_CONFIG: RequestWizardPricingConfig = {
   detectedCountryCode: 'US',
   detectedCurrency: 'USD',
   legalDomains: LEGAL_DOMAINS,
+  showApproximateLocalCurrency: true,
   services: REQUEST_WIZARD_SERVICES,
   urgencyOptions: [
     {
@@ -234,19 +236,4 @@ export const DEFAULT_REQUEST_PRICING_CONFIG: RequestWizardPricingConfig = {
       timingLabel: 'Within 2 hrs',
     },
   ],
-};
-
-const PRICING_TIERS = [
-  { count: 1, fee: 1000 },
-  { count: 2, fee: 1500 },
-  { count: 3, fee: 2000 },
-  { count: 4, fee: 2400 },
-  { count: 5, fee: 2700 },
-  { count: 6, fee: 2900 },
-  { count: 7, fee: 3000 },
-];
-
-export const calculateFee = (serviceCount: number): number => {
-  const tier = PRICING_TIERS.find((entry) => entry.count === serviceCount);
-  return tier ? tier.fee : 0;
 };

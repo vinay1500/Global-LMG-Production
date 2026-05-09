@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { formatDate, formatDateTime } from '../data/formatters';
-import type { AuditEntry } from '../data/seedData';
+import type { AuditEntry } from '../data/adminTypes';
 import { 
   Search, Filter, History, User, Calendar as CalendarIcon, FileText, 
   Briefcase, CreditCard, MessageSquare, Plus, Clock, Activity, ArrowRight,

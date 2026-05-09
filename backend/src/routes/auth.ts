@@ -1,9 +1,11 @@
 import { type Request, type Response, Router } from 'express';
 import { z } from 'zod';
 import { env } from '../config/env.js';
-import { createSignedCsrfToken, verifySignedCsrfToken } from '../lib/authCrypto.js';
-import { asyncHandler, forbidden, tooManyRequests } from '../lib/httpErrors.js';
+import { createSignedCsrfToken, hashOpaqueValue } from '../lib/authCrypto.js';
+import { requireCsrf } from '../lib/csrf.js';
+import { asyncHandler, tooManyRequests } from '../lib/httpErrors.js';
 import { appendCookie, clearCookie, parseCookies } from '../lib/httpCookies.js';
+import { getRequestIpAddress, getRequestUserAgent } from '../lib/requestSecurity.js';
 import { recordSecurityEventSafely } from '../lib/securityEvents.js';
 import { authService } from '../modules/auth/authService.js';
 import { consumePersistentRateLimit } from '../modules/auth/persistentRateLimiter.js';
@@ -18,7 +20,7 @@ const cookieSecurity = {
 
 const signInSchema = z.object({
   identifier: z.string().trim().min(3).max(160),
-  password: z.string().min(8).max(200),
+  password: z.string().min(1).max(200),
   rememberMe: z.boolean(),
 });
 
@@ -26,7 +28,7 @@ const signUpSchema = z.object({
   fullName: z.string().trim().min(2).max(120),
   email: z.string().trim().email(),
   phone: z.string().trim().min(8).max(40),
-  password: z.string().min(8).max(200),
+  password: z.string().min(1).max(200),
   country: z.string().trim().min(2).max(80),
   address: z.object({
     line1: z.string().trim().min(3).max(255),
@@ -58,30 +60,16 @@ const passwordResetRequestSchema = z.object({
 const passwordResetSchema = z.object({
   email: z.string().trim().email(),
   code: z.string().trim().regex(/^\d{6}$/),
-  password: z.string().min(8).max(200),
+  password: z.string().min(1).max(200),
 });
 
 const googleAuthSchema = z.object({
   credential: z.string().trim().min(10).max(4096).optional(),
+  nonce: z.string().trim().min(16).max(256),
   rememberMe: z.boolean(),
 });
 
-const getRequestIpAddress = (request: Request) => {
-  const forwarded = request.headers['x-forwarded-for'];
-
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0]!.trim();
-  }
-
-  if (Array.isArray(forwarded) && forwarded.length > 0) {
-    return forwarded[0]!.trim();
-  }
-
-  return request.ip || 'unknown';
-};
-
 const getCookies = (cookieHeader: string | undefined) => parseCookies(cookieHeader);
-const getUserAgent = (request: Request) => request.header('user-agent')?.trim() || null;
 
 const setCsrfCookie = (response: Response) => {
   const csrfToken = createSignedCsrfToken(env.AUTH_SESSION_SECRET);
@@ -91,32 +79,10 @@ const setCsrfCookie = (response: Response) => {
   });
 };
 
-const requireCsrf = (request: Request, response: Response) => {
-  const cookies = getCookies(request.headers.cookie);
-  const cookieToken = cookies[env.CSRF_COOKIE_NAME];
-  const headerToken = request.header('x-csrf-token');
-
-  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
-    recordSecurityEventSafely({
-      eventTypeCode: 'client.csrf_mismatch',
-      ipAddress: getRequestIpAddress(request),
-      success: false,
-      userAgent: getUserAgent(request),
-    });
-    throw forbidden('csrf_mismatch', 'CSRF validation failed.');
-  }
-
-  if (!verifySignedCsrfToken(cookieToken, env.AUTH_SESSION_SECRET)) {
-    recordSecurityEventSafely({
-      eventTypeCode: 'client.csrf_mismatch',
-      ipAddress: getRequestIpAddress(request),
-      success: false,
-      userAgent: getUserAgent(request),
-    });
-    setCsrfCookie(response);
-    throw forbidden('csrf_invalid', 'CSRF validation failed.');
-  }
-};
+const requireAuthCsrf = (request: Request, response: Response) =>
+  requireCsrf(request, {
+    onInvalidSignedToken: () => setCsrfCookie(response),
+  });
 
 const assertSignOutRateLimit = async (request: Request) => {
   const rateLimit = await consumePersistentRateLimit({
@@ -132,13 +98,65 @@ const assertSignOutRateLimit = async (request: Request) => {
       identifierValue: `signout:ip:${getRequestIpAddress(request)}`,
       ipAddress: getRequestIpAddress(request),
       success: false,
-      userAgent: getUserAgent(request),
+      userAgent: getRequestUserAgent(request),
     });
     throw tooManyRequests(
       'too_many_attempts',
       'Too many attempts. Please wait before trying again.',
       rateLimit.retryAfterSeconds
     );
+  }
+};
+
+const consumeAuthActionRateLimit = async (
+  actionCode:
+    | 'email-verification-resend'
+    | 'email-verification-verify'
+    | 'google-nonce'
+    | 'password-reset-confirm'
+    | 'password-reset-resend'
+    | 'phone-otp-resend'
+    | 'phone-otp-send'
+    | 'phone-otp-verify',
+  request: Request,
+  flowToken?: string
+) => {
+  const keys = [
+    {
+      key: `${actionCode}:ip:${getRequestIpAddress(request)}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_IP_MAX_ATTEMPTS,
+    },
+  ];
+
+  if (flowToken) {
+    keys.push({
+      key: `${actionCode}:flow:${hashOpaqueValue(flowToken, env.AUTH_SESSION_SECRET)}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    });
+  }
+
+  for (const key of keys) {
+    const rateLimit = await consumePersistentRateLimit({
+      key: key.key,
+      maxAttempts: key.maxAttempts,
+      scope: 'client_auth',
+      windowMs: env.AUTH_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+    });
+
+    if (!rateLimit.allowed) {
+      recordSecurityEventSafely({
+        eventTypeCode: 'client.rate_limit_blocked',
+        identifierValue: key.key,
+        ipAddress: getRequestIpAddress(request),
+        success: false,
+        userAgent: getRequestUserAgent(request),
+      });
+      throw tooManyRequests(
+        'too_many_attempts',
+        'Too many attempts. Please wait before trying again.',
+        rateLimit.retryAfterSeconds
+      );
+    }
   }
 };
 
@@ -220,7 +238,7 @@ authRouter.get(
 authRouter.post(
   '/auth/sign-in',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = signInSchema.parse(request.body);
     const result = await authService.signIn(payload, {
       ipAddress: getRequestIpAddress(request),
@@ -233,11 +251,11 @@ authRouter.post(
 authRouter.post(
   '/auth/sign-up',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = signUpSchema.parse(request.body);
     const result = await authService.signUp(payload, {
       ipAddress: getRequestIpAddress(request),
-      userAgent: getUserAgent(request),
+      userAgent: getRequestUserAgent(request),
     });
     applyAuthResultCookies(response, result);
     response.status(201).json(result.result);
@@ -245,9 +263,19 @@ authRouter.post(
 );
 
 authRouter.post(
+  '/auth/google/nonce',
+  asyncHandler(async (request, response) => {
+    requireAuthCsrf(request, response);
+    await consumeAuthActionRateLimit('google-nonce', request);
+    const result = await authService.issueGoogleSignInNonce();
+    response.status(201).json(result);
+  })
+);
+
+authRouter.post(
   '/auth/google',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = googleAuthSchema.parse(request.body);
     const result = await authService.signInWithGoogle(payload);
     applyAuthResultCookies(response, result);
@@ -258,9 +286,14 @@ authRouter.post(
 authRouter.post(
   '/auth/verify-email',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = verificationSchema.parse(request.body);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit(
+      'email-verification-verify',
+      request,
+      cookies[env.AUTH_FLOW_COOKIE_NAME]
+    );
     const result = await authService.verifyEmail(cookies[env.AUTH_FLOW_COOKIE_NAME], payload.code);
     applyAuthResultCookies(response, result);
     response.json(result.result);
@@ -270,9 +303,10 @@ authRouter.post(
 authRouter.post(
   '/auth/google/phone',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = phoneCaptureSchema.parse(request.body);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit('phone-otp-send', request, cookies[env.AUTH_FLOW_COOKIE_NAME]);
     const result = await authService.submitGooglePhone(
       cookies[env.AUTH_FLOW_COOKIE_NAME],
       payload.phone,
@@ -286,9 +320,14 @@ authRouter.post(
 authRouter.post(
   '/auth/verify-phone-otp',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = verificationSchema.parse(request.body);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit(
+      'phone-otp-verify',
+      request,
+      cookies[env.AUTH_FLOW_COOKIE_NAME]
+    );
     const result = await authService.verifyPhoneOtp(
       cookies[env.AUTH_FLOW_COOKIE_NAME],
       payload.code
@@ -301,7 +340,7 @@ authRouter.post(
 authRouter.post(
   '/auth/password-reset/request',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = passwordResetRequestSchema.parse(request.body);
     const result = await authService.requestPasswordReset(payload.identifier, {
       ipAddress: getRequestIpAddress(request),
@@ -317,9 +356,14 @@ authRouter.post(
 authRouter.post(
   '/auth/password-reset/confirm',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const payload = passwordResetSchema.parse(request.body);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit(
+      'password-reset-confirm',
+      request,
+      cookies[env.AUTH_FLOW_COOKIE_NAME]
+    );
     const result = await authService.resetPassword(cookies[env.AUTH_FLOW_COOKIE_NAME], payload);
     applyAuthResultCookies(response, result);
     response.json(result.result);
@@ -329,8 +373,13 @@ authRouter.post(
 authRouter.post(
   '/auth/email-verification/resend',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit(
+      'email-verification-resend',
+      request,
+      cookies[env.AUTH_FLOW_COOKIE_NAME]
+    );
     const result = await authService.resendEmailVerification(
       cookies[env.AUTH_FLOW_COOKIE_NAME]
     );
@@ -342,8 +391,9 @@ authRouter.post(
 authRouter.post(
   '/auth/phone-otp/resend',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit('phone-otp-resend', request, cookies[env.AUTH_FLOW_COOKIE_NAME]);
     const result = await authService.resendPhoneOtp(cookies[env.AUTH_FLOW_COOKIE_NAME]);
     applyAuthResultCookies(response, result);
     response.json(result.result);
@@ -353,8 +403,13 @@ authRouter.post(
 authRouter.post(
   '/auth/password-reset/resend',
   asyncHandler(async (request, response) => {
-    requireCsrf(request, response);
+    requireAuthCsrf(request, response);
     const cookies = getCookies(request.headers.cookie);
+    await consumeAuthActionRateLimit(
+      'password-reset-resend',
+      request,
+      cookies[env.AUTH_FLOW_COOKIE_NAME]
+    );
     const result = await authService.resendPasswordReset(
       cookies[env.AUTH_FLOW_COOKIE_NAME]
     );

@@ -33,6 +33,7 @@ export const getMysqlPool = () => {
   if (!pool) {
     pool = mysql.createPool({
       charset: 'utf8mb4',
+      connectTimeout: env.MYSQL_CONNECT_TIMEOUT_MS,
       database: env.MYSQL_DATABASE,
       dateStrings: true,
       decimalNumbers: true,
@@ -42,7 +43,9 @@ export const getMysqlPool = () => {
       port: env.MYSQL_PORT,
       ssl: getMysqlSslConfig(),
       user: env.MYSQL_USER,
-      waitForConnections: true,
+      waitForConnections: env.MYSQL_WAIT_FOR_CONNECTIONS,
+      connectionLimit: env.MYSQL_CONNECTION_LIMIT,
+      queueLimit: env.MYSQL_QUEUE_LIMIT,
     });
   }
 

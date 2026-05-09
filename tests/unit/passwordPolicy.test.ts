@@ -15,6 +15,10 @@ describe('admin password policy', () => {
     expect(() => validateStrongPassword('Violet#Ledger42', actor)).not.toThrow();
   });
 
+  it('keeps forced-rotation password candidates on the same strong-password path', () => {
+    expect(() => validateStrongPassword('Cerulean#Vault84', actor)).not.toThrow();
+  });
+
   it('requires length, character classes, and symbols', () => {
     const issues = getAdminPasswordStrengthIssues('short', actor);
 
@@ -24,12 +28,33 @@ describe('admin password policy', () => {
     expect(issues).toContain('Include a symbol.');
   });
 
-  it('rejects passwords containing the admin email username or display name', () => {
+  it('rejects common passwords even when punctuation or casing varies', () => {
+    expect(getAdminPasswordStrengthIssues('Password123!', actor)).toContain(
+      'Choose a less common password.'
+    );
+    expect(getAdminPasswordStrengthIssues('Welcome123!', actor)).toContain(
+      'Choose a less common password.'
+    );
+  });
+
+  it('rejects passwords containing the admin email username or display name with a generic issue', () => {
     expect(getAdminPasswordStrengthIssues('Riya#Ledger42', actor)).toContain(
-      'Do not include your display name.'
+      'Choose a less common password.'
     );
     expect(getAdminPasswordStrengthIssues('riya.ops#Ledger42', actor)).toContain(
-      'Do not include the email username.'
+      'Choose a less common password.'
+    );
+  });
+
+  it('rejects obvious Global LMG and admin terms', () => {
+    expect(getAdminPasswordStrengthIssues('Global#Ledger42', actor)).toContain(
+      'Choose a less common password.'
+    );
+    expect(getAdminPasswordStrengthIssues('Admin#Ledger42', actor)).toContain(
+      'Choose a less common password.'
+    );
+    expect(getAdminPasswordStrengthIssues('Globallmg#42Vault', actor)).toContain(
+      'Choose a less common password.'
     );
   });
 });

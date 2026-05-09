@@ -23,12 +23,12 @@ export const formatCurrency = (amount: number, currencyCode = 'USD') => {
 
 export const formatDate = (dateStr: string) => {
   const d = new Date(dateStr);
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 export const formatDateTime = (dateStr: string) => {
   const d = new Date(dateStr);
-  return d.toLocaleDateString('en-IN', {
+  return d.toLocaleDateString(undefined, {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',

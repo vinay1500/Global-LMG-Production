@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "engines": {
+    "node": ">=20 <21",
+    "npm": ">=10"
+  },
   "scripts": {
     "bootstrap:admin": "tsx src/scripts/bootstrapAdmin.ts",
     "build": "tsc -p tsconfig.json",
@@ -13,6 +17,7 @@
     "smoke:webhook-signatures": "tsx src/scripts/webhookSignatureSmoke.ts",
     "reminders:process": "tsx src/scripts/processReminders.ts",
     "start": "node dist/server.js",
+    "lint": "node ../node_modules/eslint/bin/eslint.js src --cache --cache-location .eslintcache",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -22,13 +27,16 @@
     "express": "^5.1.0",
     "helmet": "^8.1.0",
     "mysql2": "^3.15.2",
+    "otplib": "^13.4.0",
     "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^25.5.0",
+    "@types/qrcode": "^1.5.6",
     "tsx": "^4.20.6",
     "typescript": "^6.0.2"
   }

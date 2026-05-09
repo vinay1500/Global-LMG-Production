@@ -24,7 +24,7 @@ const fromBase64Url = (value: string) => {
   return Buffer.from(`${normalized}${padding}`, 'base64');
 };
 
-const secureCompare = (left: string, right: string) => {
+export const timingSafeStringEqual = (left: string, right: string) => {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
 
@@ -75,11 +75,16 @@ export const createSignedCsrfToken = (secret: string) => {
 };
 
 export const verifySignedCsrfToken = (token: string, secret: string) => {
-  const [nonce, signature] = token.split('.');
-
-  if (!nonce || !signature) {
+  const parts = token.split('.');
+  if (parts.length !== 2) {
     return false;
   }
 
-  return secureCompare(hashOpaqueValue(nonce, secret), signature);
+  const [nonce, signature] = parts;
+
+  if (!nonce || !signature || !/^[a-f0-9]{64}$/i.test(signature)) {
+    return false;
+  }
+
+  return timingSafeStringEqual(hashOpaqueValue(nonce, secret), signature.toLowerCase());
 };

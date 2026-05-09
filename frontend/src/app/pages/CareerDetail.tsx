@@ -2,7 +2,8 @@ import React from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { ArrowLeft, Send, MapPin, Briefcase, Calendar, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { ExternalFormCta } from '../components/shared/ExternalFormCta';
+import { CAREERS_FORM_LINK } from '../config/launchLinks';
 import { Seo } from '../components/seo/Seo';
 import {
   getCareerCategoryById,
@@ -77,16 +78,14 @@ export const CareerDetail = () => {
                   {opening.title}
                 </h1>
               </div>
-              <a
-                href={CLIENT_INTAKE_HREF}
-                target="_blank"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
+              <ExternalFormCta
+                formLink={CAREERS_FORM_LINK}
+                fallbackClassName="max-w-sm text-sm leading-relaxed text-gray-500"
                 className="px-8 py-4 bg-black text-white rounded-full font-bold uppercase tracking-widest text-xs hover:bg-gray-800 transition-colors flex items-center gap-2"
               >
                 Apply Now
                 <Send size={14} />
-              </a>
+              </ExternalFormCta>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8 pb-12 border-b border-gray-100 mb-12">
@@ -250,16 +249,14 @@ export const CareerDetail = () => {
               {categoryOpenings.length === 1 ? 'opening is' : 'openings are'} currently available in
               this category.
             </p>
-            <a
-              href={CLIENT_INTAKE_HREF}
-              target="_blank"
-              rel="noopener noreferrer"
-              referrerPolicy="no-referrer"
+            <ExternalFormCta
+              formLink={CAREERS_FORM_LINK}
+              fallbackClassName="max-w-sm text-sm leading-relaxed text-gray-500"
               className="inline-flex items-center gap-2 px-8 py-4 bg-black text-white rounded-full text-xs font-bold uppercase tracking-widest hover:bg-gray-800 transition-colors"
             >
               Contact Recruitment
               <Send size={14} />
-            </a>
+            </ExternalFormCta>
           </div>
         </div>
       </div>

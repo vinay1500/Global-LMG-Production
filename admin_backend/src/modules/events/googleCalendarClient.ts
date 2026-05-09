@@ -1,5 +1,6 @@
 import { createHash, createSign } from 'node:crypto';
 import { env } from '../../config/env.js';
+import { providerFetch } from '../../lib/providerHttp.js';
 
 type GoogleCalendarEvent = {
   calendarOwnerEmail: string | null;
@@ -156,10 +157,14 @@ const getAccessToken = async (impersonatedEmail: string) => {
     assertion: createJwtAssertion(impersonatedEmail),
     grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
   });
-  const response = await fetch(GOOGLE_TOKEN_URL, {
+  const response = await providerFetch(GOOGLE_TOKEN_URL, {
     body,
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     method: 'POST',
+    operation: 'google_calendar_token',
+    providerCode: 'google-calendar',
+    retryDelayMs: 250,
+    safeToRetry: true,
   });
 
   if (!response.ok) {
@@ -186,13 +191,17 @@ const googleCalendarRequest = async <TResponse>(
   init: RequestInit
 ): Promise<TResponse> => {
   const accessToken = await getAccessToken(impersonatedEmail);
-  const response = await fetch(`${GOOGLE_CALENDAR_BASE_URL}${path}`, {
+  const response = await providerFetch(`${GOOGLE_CALENDAR_BASE_URL}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${accessToken}`,
       'content-type': 'application/json',
       ...(init.headers || {}),
     },
+    operation: `google_calendar_${(init.method || 'GET').toString().toLowerCase()}`,
+    providerCode: 'google-calendar',
+    retryDelayMs: 250,
+    safeToRetry: true,
   });
 
   if (!response.ok) {
@@ -241,7 +250,40 @@ const getCalendarOwnerEmail = (event: GoogleCalendarEvent) => {
   return email;
 };
 
-const getCalendarId = () => env.GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID || env.GOOGLE_CALENDAR_ID || 'primary';
+export const getGoogleCalendarIdConfig = () => {
+  const configuredCalendarId = env.GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID || env.GOOGLE_CALENDAR_ID;
+
+  if (configuredCalendarId) {
+    return {
+      calendarId: configuredCalendarId,
+      defaultedToPrimary: false,
+      source: env.GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID
+        ? 'GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID'
+        : 'GOOGLE_CALENDAR_ID',
+    };
+  }
+
+  if (env.CALENDAR_ADMIN_AUTH_MODE !== 'workspace_delegation') {
+    throw new GoogleCalendarError(
+      'Google Calendar calendar ID is required unless Workspace delegation can use the organizer primary calendar.'
+    );
+  }
+
+  return {
+    calendarId: 'primary',
+    defaultedToPrimary: true,
+    source: 'workspace_delegation_primary',
+  };
+};
+
+const getCalendarId = () => getGoogleCalendarIdConfig().calendarId;
+
+export const buildClientSafeGoogleCalendarDescription = () =>
+  [
+    'Purpose: Global LMG coordination meeting.',
+    'This invite is for scheduling and joining the meeting. Please use the Global LMG portal for confidential case details, documents, and messages.',
+    'Global LMG is not a law firm and does not provide direct legal advice.',
+  ].join('\n\n');
 
 const buildCalendarEventBody = (event: GoogleCalendarEvent, externalEventId: string) => {
   const requestMeetLink = event.modeCode === 'video' && !event.meetConferenceId;
@@ -254,14 +296,7 @@ const buildCalendarEventBody = (event: GoogleCalendarEvent, externalEventId: str
 
   return {
     attendees,
-    description: [
-      event.notes || '',
-      event.matterTitle ? `Matter: ${event.matterTitle}` : '',
-      `Client: ${event.clientName}`,
-      'Global LMG coordination/support event. Global LMG is not a law firm and does not provide direct legal advice.',
-    ]
-      .filter(Boolean)
-      .join('\n\n'),
+    description: buildClientSafeGoogleCalendarDescription(),
     ...(requestMeetLink
       ? {
           conferenceData: {

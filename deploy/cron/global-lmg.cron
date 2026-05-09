@@ -1,0 +1,17 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Global LMG v1 background jobs.
+# Install as /etc/cron.d/global-lmg and adjust the user if production does not use "global-lmg".
+
+* * * * * global-lmg /usr/bin/flock -n /var/lock/global-lmg/reminders.lock /bin/bash -lc 'set -a; . /etc/global-lmg/admin_backend.env; set +a; cd /srv/global-lmg/current && /usr/bin/npm --prefix admin_backend run reminders:process' >> /var/log/global-lmg/reminders.log 2>&1
+
+*/5 * * * * global-lmg /usr/bin/flock -n /var/lock/global-lmg/document-scan-sweeper.lock /bin/bash -lc 'set -a; . /etc/global-lmg/backend.env; set +a; cd /srv/global-lmg/current && /usr/bin/npm --prefix backend run documents:expire-pending-scans' >> /var/log/global-lmg/document-scan-sweeper.log 2>&1
+
+*/10 * * * * global-lmg /usr/bin/flock -n /var/lock/global-lmg/payment-drafts.lock /bin/bash -lc 'set -a; . /etc/global-lmg/backend.env; set +a; cd /srv/global-lmg/current && /usr/bin/npm --prefix backend run requests:expire-payment-drafts' >> /var/log/global-lmg/sweep.log 2>&1
+
+0 2 * * * global-lmg /usr/bin/flock -n /var/lock/global-lmg/fx.lock /bin/bash -lc 'set -a; . /etc/global-lmg/backend.env; set +a; cd /srv/global-lmg/current && /usr/bin/npm --prefix backend run fx:refresh' >> /var/log/global-lmg/fx.log 2>&1
+
+0 3 * * * global-lmg /usr/bin/flock -n /var/lock/global-lmg/uploads-cleanup.lock /bin/bash -lc 'set -a; . /etc/global-lmg/backend.env; set +a; cd /srv/global-lmg/current && /usr/bin/npm --prefix backend run uploads:cleanup-expired' >> /var/log/global-lmg/uploads-cleanup.log 2>&1
+
+0 4 * * 0 global-lmg /usr/bin/flock -n /var/lock/global-lmg/retention.lock /bin/bash -lc 'set -a; . /etc/global-lmg/backend.env; set +a; cd /srv/global-lmg/current && /usr/bin/npm --prefix backend run cleanup:retention' >> /var/log/global-lmg/retention.log 2>&1

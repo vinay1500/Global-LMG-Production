@@ -65,6 +65,7 @@ import {
   updateDocumentType,
   updateTemplate,
 } from '../modules/settings/templatesDocuments.js';
+import { GSTIN_PATTERN, normalizeGstin } from '../modules/settings/gstin.js';
 import { requireMutationPermission, requireReadActor, requireReadPermission, requirePermission } from './shared.js';
 
 export const settingsRouter = Router();
@@ -78,7 +79,15 @@ const invoiceSettingsSchema = z.object({
   defaultSacCode: z.string().trim().max(32).nullable().optional(),
   fallbackTaxType: z.enum(['igst', 'cgst_sgst', 'none']).optional(),
   gstEnabled: z.boolean().optional(),
-  gstin: z.string().trim().max(24).nullable().optional(),
+  gstin: z
+    .preprocess(
+      (value) => (typeof value === 'string' ? normalizeGstin(value) : value),
+      z
+        .string()
+        .regex(GSTIN_PATTERN, 'GSTIN must be a 15-character Indian GSTIN.')
+        .nullable()
+    )
+    .optional(),
   invoiceFooter: z.string().trim().max(4000).nullable().optional(),
   invoicePrefix: z.string().trim().min(1).max(24).optional(),
   paymentTermsDays: z.number().int().min(0).max(365).optional(),

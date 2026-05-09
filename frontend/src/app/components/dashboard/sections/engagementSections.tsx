@@ -169,7 +169,7 @@ export const DashboardMessagesSection = ({
                           {safeText(message.senderName, 'Global LMG')}
                         </p>
                       )}
-                      <p className="text-sm">{safeText(message.content)}</p>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed">{safeText(message.content)}</p>
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mt-2 flex flex-wrap gap-2">
                           {message.attachments.map((attachment, index) => (

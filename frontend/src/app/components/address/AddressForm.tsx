@@ -3,7 +3,6 @@ import { ADDRESS_AUTOCOMPLETE_MODE, GOOGLE_MAPS_API_KEY } from '../../config/run
 import {
   COUNTRIES,
   DEFAULT_COUNTRY,
-  getCountryCode,
   getCountryNameOrSelf,
   isPostalCodeReasonable,
 } from '../../utils/countryDialCodes';
@@ -137,11 +136,9 @@ export const AddressForm = ({
   const autocompleteInputRef = React.useRef<HTMLInputElement | null>(null);
   const latestValueRef = React.useRef(value);
   const latestOnChangeRef = React.useRef(onChange);
-  const citySuggestionsCacheRef = React.useRef(new Map<string, string[]>());
   const [autocompleteStatus, setAutocompleteStatus] = React.useState<'disabled' | 'ready' | 'failed' | 'loading'>(
     ADDRESS_AUTOCOMPLETE_MODE === 'google' && GOOGLE_MAPS_API_KEY ? 'loading' : 'disabled'
   );
-  const [citySuggestions, setCitySuggestions] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     latestValueRef.current = value;
@@ -214,48 +211,6 @@ export const AddressForm = ({
   const stateSuggestions = getStateRegionSuggestions(value.country);
   const postalCodeMetadata = getPostalCodeMetadata(value.country);
   const postalLooksValid = !value.postalCode || isPostalCodeReasonable(value.postalCode, value.country);
-
-  React.useEffect(() => {
-    const countryCode = getCountryCode(value.country) || value.country.trim().toUpperCase();
-    const stateCode = getStateCode(value.country, value.state);
-
-    if (!countryCode || !stateCode) {
-      setCitySuggestions([]);
-      return;
-    }
-
-    const cacheKey = `${countryCode}:${stateCode}`;
-    const cachedSuggestions = citySuggestionsCacheRef.current.get(cacheKey);
-    if (cachedSuggestions) {
-      setCitySuggestions(cachedSuggestions);
-      return;
-    }
-
-    let isMounted = true;
-    import('country-state-city/lib/city')
-      .then((cityModule) => {
-        if (!isMounted) {
-          return;
-        }
-
-        const nextSuggestions = cityModule.default
-          .getCitiesOfState(countryCode, stateCode)
-          .map((city) => city.name)
-          .sort((left, right) => left.localeCompare(right))
-          .slice(0, 750);
-        citySuggestionsCacheRef.current.set(cacheKey, nextSuggestions);
-        setCitySuggestions(nextSuggestions);
-      })
-      .catch(() => {
-        if (isMounted) {
-          setCitySuggestions([]);
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [value.country, value.state]);
 
   const update = (patch: Partial<AddressFormValue>) =>
     onChange({
@@ -361,19 +316,11 @@ export const AddressForm = ({
           <input
             className={fieldClass}
             id={`${idPrefix}-city`}
-            list={citySuggestions.length ? `${idPrefix}-city-suggestions` : undefined}
             onChange={(event) => update({ city: event.target.value, sourceCode: 'manual', validationStatusCode: 'manual' })}
             required
             type="text"
             value={value.city}
           />
-          {citySuggestions.length ? (
-            <datalist id={`${idPrefix}-city-suggestions`}>
-              {citySuggestions.map((city) => (
-                <option key={city} value={city} />
-              ))}
-            </datalist>
-          ) : null}
         </label>
         <label className="block">
           <span className={labelClass}>{postalCodeMetadata.label}</span>

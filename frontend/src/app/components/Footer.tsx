@@ -1,9 +1,10 @@
 import React from 'react';
 import { Mail, Phone, MapPin, Globe } from 'lucide-react';
 import { useNavigate } from 'react-router';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { CONTACT_FORM_LINK } from '../config/launchLinks';
 import { FOOTER_CONTENT } from '../content/site/common';
 import { EXPERTISE_CATALOG } from '../data/expertiseCatalog';
+import { ExternalFormCta } from './shared/ExternalFormCta';
 
 export const Footer = () => {
   const navigate = useNavigate();
@@ -110,15 +111,13 @@ export const Footer = () => {
                 </p>
                 
                 
-                <a
-                  href={CLIENT_INTAKE_HREF}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  referrerPolicy="no-referrer"
+                <ExternalFormCta
+                  formLink={CONTACT_FORM_LINK}
+                  fallbackClassName="mt-4 block text-[10px] leading-relaxed text-gray-400"
                   className="inline-block mt-4 text-[10px] font-bold uppercase tracking-[0.2em] border-b border-white pb-1 hover:text-blue-400 transition-colors"
                 >
                   {FOOTER_CONTENT.coverage.ctaLabel}
-                </a>
+                </ExternalFormCta>
               </div>
               <div className="absolute top-1/4 left-1/3 w-2 h-2 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)]" />
               <div className="absolute top-1/3 left-1/2 w-1.5 h-1.5 bg-blue-400 rounded-full" />

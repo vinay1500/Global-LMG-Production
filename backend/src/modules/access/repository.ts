@@ -40,13 +40,17 @@ export class AccessRepository {
            u.display_name,
            u.email,
            u.actor_type_code,
-           cac.client_account_id
+           ca.id AS client_account_id
          FROM users u
          LEFT JOIN client_account_contacts cac
            ON cac.user_id = u.id
            AND cac.portal_access_enabled = 1
            AND cac.archived_at IS NULL
+         LEFT JOIN client_accounts ca
+           ON ca.id = cac.client_account_id
+          AND ca.archived_at IS NULL
          WHERE u.public_id = ?
+           AND u.login_enabled = 1
            AND u.archived_at IS NULL
          LIMIT 1`,
         [userPublicId]

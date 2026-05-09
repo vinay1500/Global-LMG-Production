@@ -78,7 +78,15 @@ import type {
   UpdateUrgencyRulePayload,
   UrgencyRulePayload,
 } from './contracts';
-import { ApiRequestError, apiRequest } from './client';
+import {
+  API_DOWNLOAD_TIMEOUT_MS,
+  FORM_IDEMPOTENCY_TTL_MS,
+  PAYMENT_IDEMPOTENCY_TTL_MS,
+  ApiRequestError,
+  apiRequest,
+  createIdempotencyIdentity,
+  fetchWithTimeout,
+} from './client';
 import { API_ENDPOINTS } from './endpoints';
 
 const withQuery = (url: string, params: Record<string, string | number | undefined>) => {
@@ -137,12 +145,12 @@ const downloadBlob = (blob: Blob, fileName: string) => {
 };
 
 const fetchBlob = async (url: string, fallbackFileName: string) => {
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     credentials: 'include',
     headers: {
       Accept: 'application/pdf',
     },
-  });
+  }, API_DOWNLOAD_TIMEOUT_MS);
 
   if (!response.ok) {
     let message = `Download failed with status ${response.status}`;
@@ -174,6 +182,13 @@ export const adminApi = {
     apiRequest<CreateClientResponse>(API_ENDPOINTS.admin.createClient(), {
       body: JSON.stringify(payload),
       headers: { 'content-type': 'application/json' },
+      idempotency: {
+        identity: createIdempotencyIdentity('admin-client-create', [
+          payload.email,
+          payload.phone ?? '',
+        ]),
+        ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+      },
       method: 'POST',
     }),
   createInvoice: (payload: {
@@ -185,6 +200,15 @@ export const adminApi = {
     apiRequest<{ invoiceId: string; status: 'created' }>(API_ENDPOINTS.admin.createInvoice(), {
       body: JSON.stringify(payload),
       headers: { 'content-type': 'application/json' },
+      idempotency: {
+        identity: createIdempotencyIdentity('admin-invoice-create', [
+          payload.matterId,
+          payload.amount,
+          payload.dueDate ?? '',
+          payload.description,
+        ]),
+        ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+      },
       method: 'POST',
     }),
   createEvent: (payload: {
@@ -285,6 +309,14 @@ export const adminApi = {
     apiRequest<CreateMatterResponse>(API_ENDPOINTS.admin.createMatter(), {
       body: JSON.stringify(payload),
       headers: { 'content-type': 'application/json' },
+      idempotency: {
+        identity: createIdempotencyIdentity('admin-matter-create', [
+          payload.clientAccountPublicId,
+          payload.title,
+          payload.serviceCode ?? payload.serviceCodes?.join(',') ?? '',
+        ]),
+        ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+      },
       method: 'POST',
     }),
   createRefund: (payload: {
@@ -296,6 +328,15 @@ export const adminApi = {
     apiRequest<{ status: 'created' }>(API_ENDPOINTS.admin.createRefund(), {
       body: JSON.stringify(payload),
       headers: { 'content-type': 'application/json' },
+      idempotency: {
+        identity: createIdempotencyIdentity('admin-refund-create', [
+          payload.paymentId,
+          payload.invoiceId ?? '',
+          payload.amount,
+          payload.reasonText,
+        ]),
+        ttlMs: PAYMENT_IDEMPOTENCY_TTL_MS,
+      },
       method: 'POST',
     }),
   recordPayment: (payload: {
@@ -309,6 +350,16 @@ export const adminApi = {
     apiRequest<RecordPaymentResponse>(API_ENDPOINTS.admin.recordPayment(), {
       body: JSON.stringify(payload),
       headers: { 'content-type': 'application/json' },
+      idempotency: {
+        identity: createIdempotencyIdentity('admin-manual-payment', [
+          payload.invoiceId,
+          payload.amount,
+          payload.paymentDate,
+          payload.paymentMethod,
+          payload.referenceNumber ?? '',
+        ]),
+        ttlMs: PAYMENT_IDEMPOTENCY_TTL_MS,
+      },
       method: 'POST',
     }),
   getAuditEntries: (params: { limit?: number; offset?: number } = {}) =>
@@ -729,6 +780,10 @@ export const adminApi = {
     }>(
       API_ENDPOINTS.admin.sendInvoice(invoiceId),
       {
+        idempotency: {
+          identity: createIdempotencyIdentity('admin-invoice-send', [invoiceId]),
+          ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+        },
         method: 'POST',
       }
     ),
@@ -823,9 +878,9 @@ export const adminApi = {
     API_ENDPOINTS.admin.reportDrilldownExport(kind),
   downloadReportDrilldownCsv: async (kind: ReportDrilldownKind) => {
     const fallbackName = `global-lmg-${kind}-${new Date().toISOString().slice(0, 10)}.csv`;
-    const response = await fetch(API_ENDPOINTS.admin.reportDrilldownExport(kind), {
+    const response = await fetchWithTimeout(API_ENDPOINTS.admin.reportDrilldownExport(kind), {
       credentials: 'include',
-    });
+    }, API_DOWNLOAD_TIMEOUT_MS);
 
     if (!response.ok) {
       let errorCode = 'csv_export_failed';
@@ -868,7 +923,20 @@ export const adminApi = {
       {
         body: content,
         headers: { 'content-type': 'application/octet-stream' },
+        idempotency: {
+          identity: createIdempotencyIdentity('admin-document-upload', [
+            payload.matterId,
+            payload.file.name,
+            payload.file.size,
+            checksumSha256,
+            payload.visibility,
+            payload.reviewState,
+            payload.categoryCode ?? '',
+          ]),
+          ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+        },
         method: 'POST',
+        timeoutMs: API_DOWNLOAD_TIMEOUT_MS,
       }
     );
   },
@@ -891,7 +959,18 @@ export const adminApi = {
       {
         body: content,
         headers: { 'content-type': 'application/octet-stream' },
+        idempotency: {
+          identity: createIdempotencyIdentity('admin-document-version-upload', [
+            documentId,
+            payload.file.name,
+            payload.file.size,
+            checksumSha256,
+            payload.reviewState,
+          ]),
+          ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+        },
         method: 'POST',
+        timeoutMs: API_DOWNLOAD_TIMEOUT_MS,
       }
     );
   },

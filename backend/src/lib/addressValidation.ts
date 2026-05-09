@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { providerFetch } from './providerHttp.js';
 
 export interface AddressForValidation {
   city: string;
@@ -32,7 +33,7 @@ export const validateAddressForStorage = async (
   }
 
   try {
-    const response = await fetch(
+    const response = await providerFetch(
       `https://addressvalidation.googleapis.com/v1:validateAddress?key=${encodeURIComponent(apiKey)}`,
       {
         body: JSON.stringify({
@@ -47,6 +48,10 @@ export const validateAddressForStorage = async (
         }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
+        operation: 'google_address_validation',
+        providerCode: 'google-address-validation',
+        retryDelayMs: 250,
+        safeToRetry: true,
       }
     );
 

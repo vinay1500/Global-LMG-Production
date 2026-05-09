@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { formatCurrency, formatDate } from '../../data/formatters';
-import type { Invoice } from '../../data/seedData';
+import type { Invoice } from '../../data/adminTypes';
 import type { InvoiceSettings } from '../../lib/api/contracts';
 
 type InvoicePreviewProps = {

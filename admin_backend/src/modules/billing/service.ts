@@ -1,13 +1,12 @@
 import type { RowDataPacket } from 'mysql2/promise';
 import { badRequest, notFound } from '../../lib/httpErrors.js';
-import { formatCurrencyAmount } from '../../lib/currencyFormat.js';
 import { executeStatement, queryRows, withTransaction, type QueryExecutor } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
 import {
   buildPaginationMeta,
   countInvoices,
   fetchInvoices,
-  fetchMatters,
+  fetchMatterOptions,
   fetchPayments,
   normalizePagination,
 } from '../shared.js';
@@ -28,6 +27,7 @@ import {
   ensureInvoiceTemplateSnapshot,
   renderAndStoreInvoiceTemplateSnapshot,
 } from './invoiceTemplateRendering.js';
+import { logEvent } from '../../lib/observability.js';
 
 type RefundRow = RowDataPacket & {
   amount: number;
@@ -167,8 +167,15 @@ const maskEmail = (value: string) => {
   return `${localPart.slice(0, 2)}***@${domainPart}`;
 };
 
-const formatInvoiceMoney = (amount: number, currencyCode: string) =>
-  formatCurrencyAmount(amount, normalizeCurrencyCode(currencyCode) || 'USD');
+const formatInvoiceMoney = (amount: number, currencyCode: string) => {
+  const normalizedCurrency = normalizeCurrencyCode(currencyCode) || 'USD';
+  const formattedAmount = Number(amount || 0).toLocaleString('en-US', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
+
+  return `${normalizedCurrency} ${formattedAmount}`;
+};
 
 const normalizeMoney = (value: number | string) => {
   const minorUnits = toMinorUnits(value);
@@ -540,7 +547,15 @@ const sendInvoiceEmailIfConfigured = async (
   return { status: result.status === 'sent' ? ('sent' as const) : ('failed' as const) };
 };
 
-const listRefunds = async () => {
+const listRefunds = async (filters: { invoiceIds?: string[] } = {}) => {
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (filters.invoiceIds?.length) {
+    where.push(`inv.public_id IN (${filters.invoiceIds.map(() => '?').join(', ')})`);
+    params.push(...filters.invoiceIds);
+  }
+
   const rows = await queryRows<RefundRow>(
     `SELECT
        rf.public_id AS id,
@@ -561,7 +576,9 @@ const listRefunds = async () => {
      LEFT JOIN matters matter ON matter.id = inv.matter_id
      JOIN client_accounts ca ON ca.id = pt.client_account_id
      LEFT JOIN users requester ON requester.id = rf.requested_by_user_id
-     ORDER BY rf.requested_at DESC`
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY rf.requested_at DESC`,
+    params
   );
 
   return rows.map((row) => ({
@@ -581,20 +598,38 @@ const listRefunds = async () => {
 };
 
 export const getWorkspace = async (options: { limit?: number; offset?: number } = {}) => {
+  const startedAt = process.hrtime.bigint();
   const pagination = normalizePagination(options);
-  const [invoices, total] = await Promise.all([
-    fetchInvoices({ limit: pagination.limit, offset: pagination.offset }),
-    countInvoices({}),
-  ]);
-
-  return {
+  const invoices = await fetchInvoices({ limit: pagination.limit, offset: pagination.offset });
+  const total = await countInvoices({});
+  const invoiceSettings = await getInvoiceSettings();
+  const matters = await fetchMatterOptions({ limit: 100 });
+  const invoiceIds = invoices.map((invoice) => invoice.id);
+  const payments = invoiceIds.length ? await fetchPayments({ invoiceIds }) : [];
+  const refunds = invoiceIds.length ? await listRefunds({ invoiceIds }) : [];
+  const response = {
     invoices,
-    invoiceSettings: await getInvoiceSettings(),
-    matters: await fetchMatters({ limit: 100 }),
+    invoiceSettings,
+    matters,
     pagination: buildPaginationMeta(pagination, total),
-    payments: await fetchPayments(),
-    refunds: await listRefunds(),
+    payments,
+    refunds,
   };
+
+  if (env.APP_ENV !== 'production') {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    logEvent('info', 'admin.billing_workspace.loaded', {
+      durationMs: Number(durationMs.toFixed(2)),
+      invoiceCount: invoices.length,
+      limit: pagination.limit,
+      offset: pagination.offset,
+      paymentCount: payments.length,
+      queryCountEstimate: invoiceIds.length ? 8 : 6,
+      refundCount: refunds.length,
+    });
+  }
+
+  return response;
 };
 
 export const createInvoice = async (

@@ -12,17 +12,64 @@ export class PasswordPolicyError extends Error {
   }
 }
 
+const COMMON_PASSWORD_MESSAGE = 'Choose a less common password.';
+
+const COMMON_PASSWORD_BLOCKLIST = new Set([
+  'admin123',
+  'admin123456',
+  'changeme',
+  'defaultpassword',
+  'letmein',
+  'password',
+  'password1',
+  'password123',
+  'qwerty',
+  'qwerty123',
+  'welcome',
+  'welcome123',
+]);
+
+const OBVIOUS_BUSINESS_TOKENS = ['admin', 'global', 'globallmg'];
+
+const normalizePasswordToken = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+const hasCommonPasswordSignal = (
+  normalizedPasswordToken: string,
+  actor: PasswordPolicyActor
+) => {
+  const emailLocalPart = actor.email.split('@')[0]?.toLowerCase() || '';
+  const normalizedEmailLocalPart = normalizePasswordToken(emailLocalPart);
+  const displayTokens = actor.displayName
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map(normalizePasswordToken)
+    .filter((token) => token.length >= 4);
+
+  if (
+    Array.from(COMMON_PASSWORD_BLOCKLIST).some((password) =>
+      normalizedPasswordToken.includes(password)
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    OBVIOUS_BUSINESS_TOKENS.some((token) => normalizedPasswordToken.includes(token)) ||
+    (normalizedEmailLocalPart.length >= 4 && normalizedPasswordToken.includes(normalizedEmailLocalPart)) ||
+    displayTokens.some((token) => normalizedPasswordToken.includes(token))
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
 export const getAdminPasswordStrengthIssues = (
   newPassword: string,
   actor: PasswordPolicyActor
 ) => {
   const issues: string[] = [];
-  const normalizedPassword = newPassword.toLowerCase();
-  const emailLocalPart = actor.email.split('@')[0]?.toLowerCase() || '';
-  const displayTokens = actor.displayName
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length >= 4);
+  const normalizedPasswordToken = normalizePasswordToken(newPassword);
 
   if (newPassword.length < 12) {
     issues.push('Use at least 12 characters.');
@@ -44,16 +91,15 @@ export const getAdminPasswordStrengthIssues = (
     issues.push('Include a symbol.');
   }
 
-  if (emailLocalPart.length >= 4 && normalizedPassword.includes(emailLocalPart)) {
-    issues.push('Do not include the email username.');
-  }
-
-  if (displayTokens.some((token) => normalizedPassword.includes(token))) {
-    issues.push('Do not include your display name.');
+  if (hasCommonPasswordSignal(normalizedPasswordToken, actor)) {
+    issues.push(COMMON_PASSWORD_MESSAGE);
   }
 
   return issues;
 };
+
+// TODO: If breach-corpus checks are added later, use HIBP k-anonymity in an explicit
+// opt-in mode so raw passwords are never sent to external services.
 
 export const validateStrongPassword = (
   newPassword: string,

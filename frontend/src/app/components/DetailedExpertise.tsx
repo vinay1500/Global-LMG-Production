@@ -4,7 +4,8 @@ import { HOME_DETAILED_EXPERTISE_CONTENT } from '../content/site/home';
 import { EXPERTISE_CATALOG } from '../data/expertiseCatalog';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { CLIENT_INTAKE_FORM_LINK } from '../config/launchLinks';
+import { ExternalFormCta } from './shared/ExternalFormCta';
 
  
 export const DetailedExpertise = () => {
@@ -195,16 +196,14 @@ export const DetailedExpertise = () => {
                 <div className="pt-12">
                   
                   
-                  <a
-                    href={CLIENT_INTAKE_HREF}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    referrerPolicy="no-referrer"
+                  <ExternalFormCta
+                    formLink={CLIENT_INTAKE_FORM_LINK}
+                    fallbackClassName="max-w-sm text-sm leading-relaxed text-gray-500"
                     className="inline-flex items-center gap-3 px-10 py-5 bg-black text-white text-xs font-bold uppercase tracking-[0.2em] hover:bg-gray-800 transition-colors"
                   >
                     {HOME_DETAILED_EXPERTISE_CONTENT.ctaLabel}
                     <ArrowRight size={16} />
-                  </a>
+                  </ExternalFormCta>
                 </div>
               </motion.div>
             </AnimatePresence>

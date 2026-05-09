@@ -11,6 +11,9 @@ Scope: Global LMG public frontend, client API, admin frontend, admin API, remind
 3. Detect reminder/provider failures before clients are affected.
 4. Keep enough logs and event trails for incident reconstruction without storing secrets.
 
+For early single-VPS launch sizing, swap, PM2 memory restart limits, host
+resource alerts, and upgrade triggers, see `docs/vps-capacity-checklist.md`.
+
 ## UptimeRobot
 
 Current live status:
@@ -51,6 +54,23 @@ Alert rules:
 - 1 failed check: warn in operations channel.
 - 2 consecutive failed checks: page primary owner.
 - 5 minutes degraded: open incident record.
+
+## Host Resource Alerts
+
+Configure VPS-level alerts in the hosting dashboard or a lightweight agent:
+
+| Signal | Threshold | Action |
+| --- | ---: | --- |
+| CPU | > 80% for 10 minutes | Inspect PM2, ClamAV, cron overlap, slow queries |
+| RAM | > 80% for 10 minutes | Check PM2 RSS, ClamAV RSS, swap use |
+| Swap | > 25% for 10 minutes | Treat as RAM pressure warning |
+| Disk | > 75% used | Rotate logs, prune backups, expand disk, or move uploads to S3 |
+| API health | 2 consecutive failures | Page primary owner |
+| Reminder cron | no successful run for 5 minutes | Check cron logs and lock files |
+
+The lean launch target is one VPS with Nginx, PM2, static frontends, client API,
+admin API, ClamAV, cron jobs, and Aiven MySQL. Minimum and recommended specs
+are documented in `docs/vps-capacity-checklist.md`.
 
 ## Sentry
 
@@ -174,19 +194,24 @@ Retention:
 - Keep at least 14 days in beta and 30 days in production.
 - Ship logs to a central store when public traffic begins.
 
-## Reminder Cron Logs
+## Cron Background Job Logs
 
-Production reminder processor command:
+Production background jobs are installed from `deploy/cron/global-lmg.cron`.
+See `docs/cron-background-jobs.md` for schedules, lock files, install steps,
+manual commands, and verification drills.
+
+Reminder processor command:
 
 ```bash
-cd /srv/global-lmg/current/admin_backend
-npm run reminders:process
+cd /srv/global-lmg/current
+set -a; . /etc/global-lmg/admin_backend.env; set +a
+npm --prefix admin_backend run reminders:process
 ```
 
-Suggested cron:
+Cron commands use `flock` to prevent overlapping runs. Reminder output goes to:
 
-```cron
-* * * * * cd /srv/global-lmg/current/admin_backend && /usr/bin/npm run reminders:process >> /var/log/global-lmg/reminders.log 2>&1
+```bash
+/var/log/global-lmg/reminders.log
 ```
 
 What success looks like:
@@ -206,7 +231,11 @@ Manual checks:
 
 ```bash
 tail -n 200 /var/log/global-lmg/reminders.log
-npm --prefix admin_backend run reminders:process
+tail -n 200 /var/log/global-lmg/fx.log
+tail -n 200 /var/log/global-lmg/sweep.log
+tail -n 200 /var/log/global-lmg/uploads-cleanup.log
+tail -n 200 /var/log/global-lmg/document-scan-sweeper.log
+tail -n 200 /var/log/global-lmg/retention.log
 ```
 
 ## Provider Failure Monitoring
@@ -214,6 +243,9 @@ npm --prefix admin_backend run reminders:process
 Resend:
 
 - Monitor `email_events` for bounced, complained, failed, and delivery-delayed states.
+- `email_events.payload_json` is intentionally minimized and retained for 90
+  days only. Use explicit columns such as provider event/message id, status,
+  received timestamp, and recipient email for operational triage.
 - Monitor audit events:
   - `invoice.email_failed`
   - `invoice.email_skipped_manual_mode`
@@ -223,6 +255,9 @@ Resend:
 Twilio:
 
 - Monitor `sms_events` for failed and undelivered states.
+- `sms_events.payload_json` is intentionally minimized and retained for 90
+  days only. It should not contain raw SMS body content; use provider message
+  id, delivery status, error code/message, and phone columns for support.
 - Monitor reminder SMS failure reason text.
 - Confirm webhook monitor reaches `/api/v1/webhooks/twilio/status`.
 

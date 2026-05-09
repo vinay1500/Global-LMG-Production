@@ -1,5 +1,4 @@
 // Shared admin view types.
-// Historical sample records were removed so routed production pages cannot fall back to fake data.
 
 // ---- ENUMS & TYPES ----
 
@@ -25,20 +24,6 @@ export interface PackageTier {
 export type ConsultationMode = 'video' | 'phone' | 'in-person';
 export type AdminRole = 'super-admin' | 'management' | 'billing-admin' | 'case-manager' | 'messaging-desk' | 'team-coordinator';
 export type DocReviewState = 'unreviewed' | 'reviewed' | 'requires-revision';
-
-export const LIFECYCLE_STAGES: { id: LifecycleStage; label: string }[] = [
-  { id: 'request-received', label: 'Request Received' },
-  { id: 'verification-call', label: 'Verification Call' },
-  { id: 'consultation', label: 'Consultation' },
-  { id: 'action-plan', label: 'Action Plan' },
-  { id: 'resolution', label: 'Resolution' },
-];
-
-export const SERVICES: Array<{ baseFee: number; description: string; icon: string; id: string; name: string }> = [];
-export const EXPERTISE_AREAS: string[] = [];
-export const PRICING_TIERS: Array<{ count: number; fee: number }> = [];
-export const calculateFee = (n: number) => PRICING_TIERS.find(t => t.count === n)?.fee ?? 0;
-export const TIME_SLOTS: string[] = [];
 
 // ---- INTERFACES ----
 
@@ -334,26 +319,3 @@ export interface AuditEntry {
   newValue?: string;
   sourceModule: string;
 }
-
-// ---- EMPTY COMPATIBILITY EXPORTS ----
-// Compatibility exports are intentionally empty. Routed admin pages must render API-backed data or empty states.
-export const CURRENT_CLIENT: PlatformUser | null = null;
-export const PLATFORM_USERS: PlatformUser[] = [];
-export const MATTERS: Matter[] = [];
-export const LEADS: Lead[] = [];
-export const PACKAGES: MatterPackage[] = [];
-export const INVOICES: Invoice[] = [];
-export const PAYMENTS: Payment[] = [];
-export const NOTIFICATIONS: SystemNotification[] = [];
-export const EVENTS: PlatformEvent[] = [];
-export const DOCUMENTS: PlatformDocument[] = [];
-export const MESSAGE_THREADS: MessageThread[] = [];
-export const CHAT_MESSAGES: ChatMessage[] = [];
-export const ADVOCATES: Advocate[] = [];
-export const STAFF_MEMBERS: StaffMember[] = [];
-export const AUDIT_ENTRIES: AuditEntry[] = [];
-
-export { formatCurrency, formatDate, formatDateTime } from './formatters';
-export { getServiceName } from './referenceData';
-
-export const getUserById = (id: string) => PLATFORM_USERS.find(u => u.id === id);

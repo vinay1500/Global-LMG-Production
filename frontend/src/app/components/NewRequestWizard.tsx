@@ -25,6 +25,7 @@ import {
   type UrgencyLevel,
   type RequestData
 } from '../data/requestWizardData';
+import { fetchWithTimeout } from '../lib/api/client';
 import { dashboardApi } from '../lib/api/dashboard';
 import { formatCurrencyAmount } from '../utils/currency';
 import { getCountryCurrency, getCountryTimeZone } from '../utils/geoAddressData';
@@ -79,7 +80,7 @@ const fetchUsdRate = async (quoteCurrencyCode: string): Promise<LocalCurrencyEst
 
   for (const url of buildUsdRateUrls()) {
     try {
-      const response = await fetch(url, { headers: { accept: 'application/json' } });
+      const response = await fetchWithTimeout(url, { headers: { accept: 'application/json' } });
       if (!response.ok) {
         continue;
       }
@@ -215,6 +216,7 @@ const normalizePricingConfig = (config: RequestWizardPricingConfig): RequestWiza
   consultationModes: config.consultationModes || [],
   services: config.services || [],
   legalDomains: config.legalDomains || [],
+  showApproximateLocalCurrency: config.showApproximateLocalCurrency !== false,
   urgencyOptions:
     (config.urgencyOptions || []).length > 0
       ? config.urgencyOptions.map((urgency) => ({
@@ -354,9 +356,17 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
   }, [clientTimeZone, isOpen]);
 
   const localCurrencyCode = useMemo(() => {
+    if (pricingConfig?.showApproximateLocalCurrency === false) {
+      return null;
+    }
+
     const currency = getCountryCurrency(pricingConfig?.countryPricing.countryCode || billingCountryCode);
     return currency && currency !== 'USD' ? currency : null;
-  }, [billingCountryCode, pricingConfig?.countryPricing.countryCode]);
+  }, [
+    billingCountryCode,
+    pricingConfig?.countryPricing.countryCode,
+    pricingConfig?.showApproximateLocalCurrency,
+  ]);
 
   useEffect(() => {
     if (!isOpen || !localCurrencyCode) {
@@ -510,7 +520,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
     }
 
     const localAmount = formatMoney(toMoney(amount * matchingEstimate.rate), matchingEstimate.currencyCode);
-    return `${dollarAmount} (approx ${localAmount})`;
+    return `${dollarAmount} (approx. ${localAmount})`;
   };
   const serviceFee = toMoney(selectedServices.reduce((sum, service) => sum + service.baseFee, 0));
   const consultationFee = toMoney(selectedConsultationMode?.fee || 0);
@@ -968,7 +978,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
                       </div>
                       <h3 className="text-2xl font-bold mb-2">Your request is ready for submission.</h3>
                       <p className="text-gray-500">
-                        Review your selected services and estimated fees before submitting.
+                        Review your selected services and complete payment to submit your request.
                       </p>
                       <p className="mt-3 text-sm text-gray-700">
                         <span className="font-semibold">Selected services:</span> {selectedServicesLabel}
@@ -997,6 +1007,9 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
                           <span className="text-2xl font-bold">{formatPriceDisplay(totalFee)}</span>
                         </div>
                         <p className="mt-2 text-xs text-gray-500">
+                          Payment is required before your request is submitted to our intake team.
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
                           Final fees may vary if scope, urgency, travel, or third-party costs change.
                         </p>
                       </div>
@@ -1050,7 +1063,7 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
                 disabled={isSubmitting || isLoadingConfig || isPricingUnavailable}
                 className="px-8 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-700 transition-colors disabled:cursor-not-allowed disabled:opacity-60 flex items-center gap-2"
               >
-                {isSubmitting ? 'Submitting...' : 'Submit Request'} <CheckCircle size={18} />
+                {isSubmitting ? 'Opening payment...' : 'Pay & Submit'} <CheckCircle size={18} />
               </button>
             )}
           </div>

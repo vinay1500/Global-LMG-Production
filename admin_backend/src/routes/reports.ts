@@ -40,11 +40,13 @@ reportsRouter.get(
       kind: String(request.params.kind || ''),
     });
 
+    response.setHeader('cache-control', 'no-store');
     response.setHeader('content-type', 'text/csv; charset=utf-8');
     response.setHeader(
       'content-disposition',
       `attachment; filename="${exportResult.fileName}"`
     );
+    response.setHeader('x-content-type-options', 'nosniff');
     response.send(exportResult.csv);
   })
 );

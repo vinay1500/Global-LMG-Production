@@ -8,7 +8,7 @@ import { StatusBadge, UrgencyDot } from '../components/dashboard/StatusBadge';
 import { LifecycleStepper } from '../components/dashboard/LifecycleStepper';
 import { formatCurrency, formatDate } from '../data/formatters';
 import { getServiceName, LIFECYCLE_STAGES } from '../data/referenceData';
-import type { Matter, Invoice, PlatformEvent, PlatformDocument, MessageThread } from '../data/seedData';
+import type { Matter, Invoice, PlatformEvent, PlatformDocument, MessageThread } from '../data/adminTypes';
 import type { MatterPackageProposalsResponse } from '../lib/api/contracts';
 import { PackageBuilder, type PackageTier } from './PackageBuilder';
 

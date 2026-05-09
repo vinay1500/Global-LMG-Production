@@ -5,6 +5,8 @@ import type {
   DashboardSnapshotResponse,
   AccountChangeRequestResponse,
   ClientAccountSettingsResponse,
+  DashboardRequestPaymentSubmissionResponse,
+  DashboardRequestPaymentVerifyResponse,
   InvoiceDetailResponse,
   InvoicePaymentOrderResponse,
   InvoicePaymentVerifyResponse,
@@ -15,7 +17,11 @@ import type {
   UpdateNotificationPreferencesPayload,
 } from './contracts';
 import { API_ENDPOINTS } from './endpoints';
-import { apiRequest } from './client';
+import {
+  PAYMENT_IDEMPOTENCY_TTL_MS,
+  apiRequest,
+  createIdempotencyIdentity,
+} from './client';
 
 const postJson = <TResponse>(url: string, payload: unknown) =>
   apiRequest<TResponse>(url, {
@@ -75,6 +81,9 @@ const toRequestSubmissionPayload = (
   };
 };
 
+const createRequestSubmitIdempotencyIdentity = (payload: DashboardRequestSubmissionPayload) =>
+  createIdempotencyIdentity('request-submit', [JSON.stringify(payload)]);
+
 export const dashboardApi = {
   buildInvoiceDownloadUrl: (invoiceId: string) => API_ENDPOINTS.me.invoiceDownload(invoiceId),
   getSnapshot: () => apiRequest<DashboardSnapshotResponse>(API_ENDPOINTS.dashboard.snapshot()),
@@ -83,7 +92,20 @@ export const dashboardApi = {
   getInvoiceDetail: (invoiceId: string) =>
     apiRequest<InvoiceDetailResponse>(API_ENDPOINTS.me.invoiceDetail(invoiceId)),
   createInvoicePaymentOrder: (invoiceId: string, payload: { amount?: number | null }) =>
-    postJson<InvoicePaymentOrderResponse>(API_ENDPOINTS.me.invoicePaymentOrder(invoiceId), payload),
+    apiRequest<InvoicePaymentOrderResponse>(API_ENDPOINTS.me.invoicePaymentOrder(invoiceId), {
+      body: JSON.stringify(payload),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      idempotency: {
+        identity: createIdempotencyIdentity('invoice-payment-order', [
+          invoiceId,
+          payload.amount ?? 'balance',
+        ]),
+        ttlMs: PAYMENT_IDEMPOTENCY_TTL_MS,
+      },
+      method: 'POST',
+    }),
   verifyInvoicePayment: (
     invoiceId: string,
     payload: {
@@ -91,7 +113,21 @@ export const dashboardApi = {
       razorpay_payment_id: string;
       razorpay_signature: string;
     }
-  ) => postJson<InvoicePaymentVerifyResponse>(API_ENDPOINTS.me.invoicePaymentVerify(invoiceId), payload),
+  ) =>
+    apiRequest<InvoicePaymentVerifyResponse>(API_ENDPOINTS.me.invoicePaymentVerify(invoiceId), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      idempotency: {
+        identity: createIdempotencyIdentity('invoice-payment-verify', [
+          invoiceId,
+          payload.razorpay_payment_id,
+        ]),
+        ttlMs: PAYMENT_IDEMPOTENCY_TTL_MS,
+      },
+      body: JSON.stringify(payload),
+    }),
   getNotificationPreferences: () =>
     apiRequest<NotificationPreferencesResponse>(API_ENDPOINTS.me.preferences()),
   getAccountSettings: () =>
@@ -136,10 +172,45 @@ export const dashboardApi = {
     postJson<void>(API_ENDPOINTS.notifications.markRead(notificationId), {}),
   dismissNotification: (notificationId: string) =>
     postJson<void>(API_ENDPOINTS.notifications.dismiss(notificationId), {}),
-  submitRequest: (request: RequestData, documentUploadIds: string[] = []) =>
-    postJson<DashboardSnapshotResponse>(
-      API_ENDPOINTS.dashboard.requests(),
-      toRequestSubmissionPayload(request, documentUploadIds)
+  submitRequest: (request: RequestData, documentUploadIds: string[] = []) => {
+    const payload = toRequestSubmissionPayload(request, documentUploadIds);
+
+    return apiRequest<DashboardRequestPaymentSubmissionResponse>(API_ENDPOINTS.dashboard.requests(), {
+      body: JSON.stringify(payload),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      idempotency: {
+        identity: createRequestSubmitIdempotencyIdentity(payload),
+        ttlMs: PAYMENT_IDEMPOTENCY_TTL_MS,
+      },
+      method: 'POST',
+    });
+  },
+  verifyRequestPayment: (
+    requestId: string,
+    payload: {
+      razorpay_order_id: string;
+      razorpay_payment_id: string;
+      razorpay_signature: string;
+    }
+  ) =>
+    apiRequest<DashboardRequestPaymentVerifyResponse>(
+      API_ENDPOINTS.dashboard.requestPaymentVerify(requestId),
+      {
+        body: JSON.stringify(payload),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        idempotency: {
+          identity: createIdempotencyIdentity('request-payment-verify', [
+            requestId,
+            payload.razorpay_payment_id,
+          ]),
+          ttlMs: PAYMENT_IDEMPOTENCY_TTL_MS,
+        },
+        method: 'POST',
+      }
     ),
   sendMessage: (payload: DashboardMessageSubmissionPayload) =>
     postJson<DashboardSnapshotResponse>(API_ENDPOINTS.dashboard.messages(), payload),

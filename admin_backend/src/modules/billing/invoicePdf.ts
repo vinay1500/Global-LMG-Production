@@ -1,6 +1,5 @@
 import type { RowDataPacket } from 'mysql2/promise';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
-import { formatCurrencyAmount } from '../../lib/currencyFormat.js';
 import { notFound } from '../../lib/httpErrors.js';
 import { queryRows } from '../../lib/mysql.js';
 import { fetchInvoices } from '../shared.js';
@@ -26,11 +25,20 @@ type PdfCanvas = {
 
 const DEFAULT_MARGINS = { bottom: 72, left: 54, right: 54, top: 120 };
 
-const formatMoney = (amount: number, currencyCode = 'USD') =>
-  formatCurrencyAmount(amount, currencyCode);
+const formatMoney = (amount: number, currencyCode = 'USD') => {
+  const normalizedCurrency = /^[A-Z]{3}$/.test(String(currencyCode || '').trim().toUpperCase())
+    ? String(currencyCode || '').trim().toUpperCase()
+    : 'USD';
+  const formattedAmount = Number(amount || 0).toLocaleString('en-US', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
+
+  return `${normalizedCurrency} ${formattedAmount}`;
+};
 
 const formatDate = (value: string) =>
-  new Intl.DateTimeFormat('en-IN', {
+  new Intl.DateTimeFormat('en-US', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',

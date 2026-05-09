@@ -14,6 +14,7 @@ import { getRequestContext } from '../../lib/observability.js';
 import { recordSecurityEvent } from '../../lib/securityEvents.js';
 import { validateAddressForStorage } from '../../lib/addressValidation.js';
 import { emailAuthProvider } from '../auth/providers/email.js';
+import { assertStrongClientPassword } from '../auth/passwordPolicy.js';
 import { smsAuthProvider } from '../auth/providers/sms.js';
 import { ensurePlatformReady } from '../platform/bootstrap.js';
 import type { NotificationPreferences } from './types.js';
@@ -131,21 +132,6 @@ const normalizePrimaryAddress = (payload: {
   state: normalizeAddressField(payload.state),
   validationStatusCode: payload.validationStatusCode || (payload.sourceCode === 'google' ? 'unverified' : 'manual'),
 });
-
-const assertStrongPassword = (value: string) => {
-  if (
-    value.trim().length < 10 ||
-    !/[A-Z]/.test(value) ||
-    !/[a-z]/.test(value) ||
-    !/\d/.test(value) ||
-    !/[^A-Za-z0-9]/.test(value)
-  ) {
-    throw badRequest(
-      'weak_password',
-      'Password must be at least 10 characters and include uppercase, lowercase, number, and special character.'
-    );
-  }
-};
 
 const assertEmailFormat = (value: string) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
@@ -567,7 +553,10 @@ export class ClientAccountsRepository {
 
     return withTransaction(this.pool, async (connection) => {
       const context = await this.resolvePortalUserContext(connection, userPublicId);
-      assertStrongPassword(payload.newPassword);
+      assertStrongClientPassword(payload.newPassword, {
+        email: context.email,
+        fullName: context.display_name,
+      });
 
       const credential = await selectOne<CredentialRow>(
         connection,

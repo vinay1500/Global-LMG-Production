@@ -1,7 +1,7 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { env } from '../../config/env.js';
-import { conflict } from '../../lib/httpErrors.js';
 import { selectOne } from '../../lib/mysqlUtils.js';
+import { providerFetch } from '../../lib/providerHttp.js';
 
 type ExchangeRateRow = RowDataPacket & {
   provider: string;
@@ -108,7 +108,13 @@ const fetchAutomaticExchangeRate = async (
 
   for (const url of buildProviderUrls(baseCurrency)) {
     try {
-      const response = await fetch(url, { headers: { accept: 'application/json' } });
+      const response = await providerFetch(url, {
+        headers: { accept: 'application/json' },
+        operation: 'fetch_exchange_rate',
+        providerCode: 'fx',
+        retryDelayMs: 200,
+        safeToRetry: true,
+      });
       if (!response.ok) {
         failures.push(`${new URL(url).host}: HTTP ${response.status}`);
         continue;
@@ -155,72 +161,22 @@ const refreshAutomaticExchangeRate = async (
 };
 
 export const convertBaseAmount = async (
-  connection: PoolConnection,
+  _connection: PoolConnection,
   amount: number,
-  targetCurrencyCode: string
+  _targetCurrencyCode: string
 ): Promise<PricingFxSnapshot> => {
   const baseCurrency = getFxBaseCurrency();
-  const targetCurrency = normalizeCurrencyCode(targetCurrencyCode) || baseCurrency;
   const baseAmount = toMoney(amount);
 
-  if (targetCurrency === baseCurrency) {
-    return {
-      amount: baseAmount,
-      currencyCode: targetCurrency,
-      exchangeRate: 1,
-      exchangeRateDate: todayDate(),
-      exchangeRateProvider: 'identity',
-      originalAmount: null,
-      originalCurrencyCode: null,
-      source: 'base_currency',
-    };
-  }
-
-  let rate = await getLatestExchangeRate(connection, baseCurrency, targetCurrency);
-
-  if (!rate || toDateOnly(rate.rate_date) !== todayDate()) {
-    try {
-      await refreshAutomaticExchangeRate(connection, baseCurrency, targetCurrency);
-      rate = await getLatestExchangeRate(connection, baseCurrency, targetCurrency);
-    } catch {
-      // The explicit failure below keeps quote/invoice generation closed when automatic FX is unavailable.
-    }
-  }
-
-  if (!rate) {
-    if (env.FX_DEFAULT_FALLBACK_POLICY === 'use_base_currency') {
-      return {
-        amount: baseAmount,
-        currencyCode: baseCurrency,
-        exchangeRate: null,
-        exchangeRateDate: null,
-        exchangeRateProvider: 'fallback-base-currency',
-        originalAmount: null,
-        originalCurrencyCode: null,
-        source: 'base_currency',
-      };
-    }
-
-    throw conflict(
-      'fx_rate_missing',
-      `No ${baseCurrency}/${targetCurrency} exchange rate is available. Automatic exchange-rate sync must complete before generating quotes or invoices.`
-    );
-  }
-
-  const rateValue = Number(rate.rate);
-  if (!Number.isFinite(rateValue) || rateValue <= 0) {
-    throw conflict('fx_rate_invalid', `The stored ${baseCurrency}/${targetCurrency} exchange rate is invalid.`);
-  }
-
   return {
-    amount: toMoney(baseAmount * rateValue),
-    currencyCode: targetCurrency,
-    exchangeRate: rateValue,
-    exchangeRateDate: toDateOnly(rate.rate_date),
-    exchangeRateProvider: rate.provider || 'stored-rate',
-    originalAmount: baseAmount,
-    originalCurrencyCode: baseCurrency,
-    source: 'exchange_rate',
+    amount: baseAmount,
+    currencyCode: baseCurrency,
+    exchangeRate: null,
+    exchangeRateDate: null,
+    exchangeRateProvider: null,
+    originalAmount: null,
+    originalCurrencyCode: null,
+    source: 'base_currency',
   };
 };
 

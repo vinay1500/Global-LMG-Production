@@ -16,7 +16,7 @@ import { NAVIGATION_COPY } from '../content/site/common';
 import { SERVICE_CATALOG, buildServicePath } from '../content/site/services';
 import { Link, useNavigate } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { CONTACT_FORM_LINK } from '../config/launchLinks';
 import { BRAND_WORDMARK } from '../config/brand';
 import { useAuth } from '../contexts/useAuth';
 import { CAREER_CATEGORIES } from '../content/site/careers';
@@ -247,16 +247,20 @@ export const Navbar = () => {
           <div className="max-w-7xl mx-auto flex justify-between items-center font-bold">
             <div className="flex gap-4 items-center">
               <span className="text-gray-300">{NAVIGATION_COPY.utility.network}</span>
-              <span className="opacity-40">|</span>
-              <a
-                href={CLIENT_INTAKE_HREF}
-                target="_blank"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
-                className="hover:text-gray-300 transition-colors"
-              >
-                {NAVIGATION_COPY.links.contact}
-              </a>
+              {CONTACT_FORM_LINK.url && (
+                <>
+                  <span className="opacity-40">|</span>
+                  <a
+                    href={CONTACT_FORM_LINK.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    referrerPolicy="no-referrer"
+                    className="hover:text-gray-300 transition-colors"
+                  >
+                    {NAVIGATION_COPY.links.contact}
+                  </a>
+                </>
+              )}
             </div>
             <div className="flex gap-4">
               <Globe size={12} className="inline mr-1" />

@@ -4871,4 +4871,448 @@ export const NORMALIZED_MIGRATIONS: SchemaMigrationDefinition[] = [
       `DEALLOCATE PREPARE add_client_addresses_active_primary_unique_stmt`,
     ],
   },
+  {
+    id: '044-request-payment-on-create-statuses',
+    description:
+      'Add request lifecycle statuses used by payment-on-create request submission.',
+    statements: [
+      `INSERT INTO request_statuses (code, label, sort_order, is_terminal, is_active)
+       VALUES
+         ('draft_payment_pending', 'Draft Payment Pending', 0, 0, 1),
+         ('submitted', 'Submitted', 1, 0, 1)
+       ON DUPLICATE KEY UPDATE
+         label = VALUES(label),
+         sort_order = VALUES(sort_order),
+         is_terminal = VALUES(is_terminal),
+         is_active = VALUES(is_active)`,
+    ],
+  },
+  {
+    id: '045-usd-official-currency-simplification',
+    description:
+      'Retire active country-specific official price overrides and add the display-only local currency setting.',
+    statements: [
+      `INSERT INTO platform_settings (
+         setting_key,
+         setting_value_json,
+         category,
+         label,
+         description,
+         value_type,
+         is_sensitive,
+         version,
+         updated_by,
+         updated_at,
+         created_at
+       )
+       VALUES (
+         'pricing.show_approximate_local_currency',
+         JSON_OBJECT('value', true),
+         'pricing',
+         'Show approximate local currency to clients',
+         'Display estimated local-currency equivalents next to official USD prices. The payable amount remains USD.',
+         'boolean',
+         0,
+         1,
+         NULL,
+         UTC_TIMESTAMP(6),
+         UTC_TIMESTAMP(6)
+       )
+       ON DUPLICATE KEY UPDATE
+         category = VALUES(category),
+         label = VALUES(label),
+         description = VALUES(description),
+         value_type = VALUES(value_type),
+         is_sensitive = VALUES(is_sensitive)`,
+      `UPDATE pricing_country_price_overrides
+       SET is_active = 0,
+           archived_at = COALESCE(archived_at, UTC_TIMESTAMP(6)),
+           updated_at = UTC_TIMESTAMP(6)
+       WHERE is_active = 1
+         AND archived_at IS NULL`,
+      `UPDATE country_pricing_overrides
+       SET currency_code = 'USD',
+           price_multiplier = 1.000000,
+           updated_at = UTC_TIMESTAMP(6)
+       WHERE archived_at IS NULL`,
+      `ALTER TABLE payment_gateway_orders MODIFY COLUMN currency_code CHAR(3) NOT NULL DEFAULT 'USD'`,
+    ],
+  },
+  {
+    id: '046-provider-webhook-delivery-deduplication',
+    description:
+      'Prevent duplicate Twilio delivery status rows for replayed provider webhooks.',
+    statements: [
+      `DELETE duplicate_events
+         FROM sms_events duplicate_events
+         INNER JOIN sms_events keep_events
+           ON keep_events.provider_code = duplicate_events.provider_code
+          AND keep_events.provider_message_id = duplicate_events.provider_message_id
+          AND keep_events.event_type_code = duplicate_events.event_type_code
+          AND keep_events.provider_message_id IS NOT NULL
+          AND keep_events.provider_message_id <> ''
+          AND (
+            keep_events.received_at > duplicate_events.received_at
+            OR (
+              keep_events.received_at = duplicate_events.received_at
+              AND keep_events.id > duplicate_events.id
+            )
+          )
+        WHERE duplicate_events.provider_message_id IS NOT NULL
+          AND duplicate_events.provider_message_id <> ''`,
+      `SET @sms_events_has_provider_message_event_unique := (
+         SELECT COUNT(*)
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE()
+           AND table_name = 'sms_events'
+           AND index_name = 'uq_sms_events_provider_message_event'
+       )`,
+      `SET @add_sms_events_provider_message_event_unique_sql := IF(
+         @sms_events_has_provider_message_event_unique = 0,
+         'ALTER TABLE sms_events ADD UNIQUE KEY uq_sms_events_provider_message_event (provider_code, provider_message_id, event_type_code)',
+         'DO 0'
+       )`,
+      `PREPARE add_sms_events_provider_message_event_unique_stmt FROM @add_sms_events_provider_message_event_unique_sql`,
+      `EXECUTE add_sms_events_provider_message_event_unique_stmt`,
+      `DEALLOCATE PREPARE add_sms_events_provider_message_event_unique_stmt`,
+    ],
+  },
+  {
+    id: '047-google-auth-nonces',
+    description:
+      'Add one-time nonce storage for Google ID token replay protection.',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS oauth_nonces (
+         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+         public_id CHAR(26) NOT NULL,
+         provider_code VARCHAR(32) NOT NULL,
+         purpose_code VARCHAR(32) NOT NULL DEFAULT 'sign_in',
+         nonce_hash CHAR(64) NOT NULL,
+         expires_at DATETIME(6) NOT NULL,
+         consumed_at DATETIME(6) NULL,
+         created_at DATETIME(6) NOT NULL,
+         updated_at DATETIME(6) NOT NULL,
+         PRIMARY KEY (id),
+         UNIQUE KEY uq_oauth_nonces_public_id (public_id),
+         UNIQUE KEY uq_oauth_nonces_provider_nonce (provider_code, nonce_hash),
+         INDEX idx_oauth_nonces_provider_expiry (provider_code, expires_at, consumed_at)
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
+    ],
+  },
+  {
+    id: '048-admin-mfa',
+    description:
+      'Add encrypted TOTP MFA secrets and short-lived admin MFA sign-in challenges.',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS admin_mfa_secrets (
+         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+         user_id BIGINT UNSIGNED NOT NULL,
+         secret_encrypted TEXT NOT NULL,
+         enabled_at DATETIME(6) NULL,
+         recovery_codes_hash_json JSON NULL,
+         last_verified_at DATETIME(6) NULL,
+         created_at DATETIME(6) NOT NULL,
+         updated_at DATETIME(6) NOT NULL,
+         PRIMARY KEY (id),
+         UNIQUE KEY uq_admin_mfa_secrets_user (user_id),
+         CONSTRAINT fk_admin_mfa_secrets_user
+           FOREIGN KEY (user_id) REFERENCES users(id)
+           ON DELETE CASCADE
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
+      `CREATE TABLE IF NOT EXISTS admin_mfa_challenges (
+         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+         public_id CHAR(26) NOT NULL,
+         user_id BIGINT UNSIGNED NOT NULL,
+         challenge_hash CHAR(64) NOT NULL,
+         remember_me TINYINT(1) NOT NULL DEFAULT 0,
+         expires_at DATETIME(6) NOT NULL,
+         consumed_at DATETIME(6) NULL,
+         attempt_count INT NOT NULL DEFAULT 0,
+         ip_address VARCHAR(64) NULL,
+         user_agent VARCHAR(255) NULL,
+         created_at DATETIME(6) NOT NULL,
+         updated_at DATETIME(6) NOT NULL,
+         PRIMARY KEY (id),
+         UNIQUE KEY uq_admin_mfa_challenges_public_id (public_id),
+         UNIQUE KEY uq_admin_mfa_challenges_hash (challenge_hash),
+         INDEX idx_admin_mfa_challenges_user_status (user_id, consumed_at, expires_at),
+         CONSTRAINT fk_admin_mfa_challenges_user
+           FOREIGN KEY (user_id) REFERENCES users(id)
+           ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
+    ],
+  },
+  {
+    id: '049-admin-mfa-rollout-setting',
+    description:
+      'Add staged platform setting for admin MFA rollout before enforcement.',
+    statements: [
+      `INSERT INTO platform_settings (
+         setting_key,
+         setting_value_json,
+         category,
+         label,
+         description,
+         value_type,
+         is_sensitive,
+         version,
+         updated_by,
+         updated_at,
+         created_at
+       )
+       VALUES (
+         'security.admin_mfa_required_mode',
+         JSON_OBJECT('value', 'off'),
+         'security',
+         'Admin MFA rollout mode',
+         'Controls staged admin MFA rollout: off, warn, or enforce. Enforcement should be enabled only after active admins are enrolled.',
+         'select',
+         0,
+         1,
+         NULL,
+         UTC_TIMESTAMP(6),
+         UTC_TIMESTAMP(6)
+       )
+       ON DUPLICATE KEY UPDATE
+         category = VALUES(category),
+         label = VALUES(label),
+         description = VALUES(description),
+         value_type = VALUES(value_type),
+         is_sensitive = VALUES(is_sensitive)`,
+    ],
+  },
+  {
+    id: '050-users-login-lookup-index',
+    description:
+      'Add a composite users index for normalized email login lookups with active-account filters.',
+    statements: [
+      `SET @has_idx_users_login_email_active := (
+         SELECT COUNT(*)
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE()
+           AND table_name = 'users'
+           AND index_name = 'idx_users_login_email_active'
+       )`,
+      `SET @add_idx_users_login_email_active_sql := IF(
+         @has_idx_users_login_email_active = 0,
+         'ALTER TABLE users ADD INDEX idx_users_login_email_active (email, actor_type_code, login_enabled, archived_at)',
+         'DO 0'
+       )`,
+      `PREPARE add_idx_users_login_email_active_stmt FROM @add_idx_users_login_email_active_sql`,
+      `EXECUTE add_idx_users_login_email_active_stmt`,
+      `DEALLOCATE PREPARE add_idx_users_login_email_active_stmt`,
+    ],
+  },
+  {
+    id: '051-drop-dead-legacy-tables',
+    description:
+      'Drop empty legacy dashboard/auth compatibility tables after normalized runtime replacements.',
+    statements: [
+      `/* Legacy dashboard snapshot and pre-normalized auth tables are no longer used by runtime code.
+          Migrations 004+ replaced them with normalized users, user_sessions, auth_flows, documents,
+          matters, billing, messaging, and audit tables. */
+       DROP TABLE IF EXISTS
+         dashboard_audit_entries,
+         dashboard_documents,
+         dashboard_events,
+         dashboard_invoices,
+         dashboard_leads,
+         dashboard_matter_packages,
+         dashboard_matters,
+         dashboard_message_threads,
+         dashboard_messages,
+         dashboard_payments,
+         dashboard_reference_advocates,
+         dashboard_reference_staff,
+         dashboard_users,
+         auth_flows_legacy_pre_009,
+         auth_sessions,
+         auth_accounts`,
+    ],
+  },
+  {
+    id: '052-drop-stored-uploads-if-unused',
+    description:
+      'Drop the empty legacy stored_uploads table after migration to document_upload_intents and document_versions.',
+    statements: [
+      `/* Current upload storage uses document_upload_intents, documents, and document_versions.
+          The early stored_uploads manifest table is no longer consumed by runtime code. */
+       DROP TABLE IF EXISTS stored_uploads`,
+    ],
+  },
+  {
+    id: '053-admin-workspace-performance-indexes',
+    description:
+      'Add composite indexes used by high-traffic admin billing and messaging workspace reads.',
+    statements: [
+      ...[
+        [
+          'invoices',
+          'idx_invoices_admin_workspace',
+          'archived_at, issue_date, created_at, id',
+        ],
+        [
+          'invoices',
+          'idx_invoices_client_archived_issue',
+          'client_account_id, archived_at, issue_date, created_at',
+        ],
+        [
+          'payment_allocations',
+          'idx_payment_allocations_invoice_payment',
+          'invoice_id, payment_transaction_id',
+        ],
+        [
+          'payment_transactions',
+          'idx_payment_transactions_client_status_captured',
+          'client_account_id, status_code, captured_at, created_at',
+        ],
+        [
+          'refunds',
+          'idx_refunds_invoice_requested',
+          'invoice_id, requested_at',
+        ],
+        [
+          'conversation_threads',
+          'idx_conversation_threads_workspace_activity',
+          'archived_at, last_message_at, updated_at, status_code',
+        ],
+        [
+          'conversation_threads',
+          'idx_conversation_threads_client_activity',
+          'client_account_id, archived_at, last_message_at, updated_at',
+        ],
+        [
+          'messages',
+          'idx_messages_thread_deleted_sent_id',
+          'thread_id, deleted_at, sent_at, id',
+        ],
+        [
+          'events',
+          'idx_events_client_status_start',
+          'client_account_id, cancelled_at, status_code, scheduled_start_at',
+        ],
+      ].flatMap(([tableName, indexName, columns], index) => {
+        const variableName = `admin_workspace_idx_${index}`;
+
+        return [
+          `SET @has_${variableName} := (
+             SELECT COUNT(*)
+             FROM information_schema.statistics
+             WHERE table_schema = DATABASE()
+               AND table_name = '${tableName}'
+               AND index_name = '${indexName}'
+           )`,
+          `SET @add_${variableName}_sql := IF(
+             @has_${variableName} = 0,
+             'ALTER TABLE ${tableName} ADD INDEX ${indexName} (${columns})',
+             'DO 0'
+           )`,
+          `PREPARE add_${variableName}_stmt FROM @add_${variableName}_sql`,
+          `EXECUTE add_${variableName}_stmt`,
+          `DEALLOCATE PREPARE add_${variableName}_stmt`,
+        ];
+      }),
+    ],
+  },
+  {
+    id: '054-gstin-column-normalization',
+    description:
+      'Normalize GSTIN storage and tighten GSTIN columns to CHAR(15) when existing data is valid or empty.',
+    statements: [
+      ...[
+        ['invoice_settings', 'gstin'],
+        ['client_accounts', 'gstin'],
+        ['invoice_billing_snapshots', 'gstin'],
+        ['invoices', 'business_gstin_snapshot'],
+      ].flatMap(([tableName, columnName], index) => {
+        const variableName = `gstin_column_${index}`;
+
+        return [
+          `UPDATE ${tableName}
+           SET ${columnName} = NULLIF(UPPER(TRIM(${columnName})), '')
+           WHERE ${columnName} IS NOT NULL`,
+          `SET @invalid_${variableName} := (
+             SELECT COUNT(*)
+             FROM ${tableName}
+             WHERE ${columnName} IS NOT NULL
+               AND ${columnName} <> ''
+               AND (${columnName} COLLATE utf8mb4_0900_ai_ci) NOT REGEXP (_utf8mb4'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$' COLLATE utf8mb4_0900_ai_ci)
+           )`,
+          `SET @needs_${variableName}_shrink := (
+             SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = '${tableName}'
+               AND column_name = '${columnName}'
+               AND NOT (data_type = 'char' AND character_maximum_length = 15)
+           )`,
+          `SET @alter_${variableName}_sql := IF(
+             @invalid_${variableName} = 0 AND @needs_${variableName}_shrink > 0,
+             'ALTER TABLE ${tableName} MODIFY COLUMN ${columnName} CHAR(15) NULL',
+             'DO 0'
+           )`,
+          `PREPARE alter_${variableName}_stmt FROM @alter_${variableName}_sql`,
+          `EXECUTE alter_${variableName}_stmt`,
+          `DEALLOCATE PREPARE alter_${variableName}_stmt`,
+        ];
+      }),
+    ],
+  },
+  {
+    id: '055-neutral-locale-timezone-column-defaults',
+    description:
+      'Change global user/event column fallbacks from India-specific defaults to neutral UTC/en-US defaults.',
+    statements: [
+      `SET @needs_users_timezone_default := (
+         SELECT COUNT(*)
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = 'users'
+           AND column_name = 'timezone_name'
+           AND (column_default IS NULL OR column_default <> 'UTC')
+       )`,
+      `SET @alter_users_timezone_default_sql := IF(
+         @needs_users_timezone_default > 0,
+         'ALTER TABLE users MODIFY COLUMN timezone_name VARCHAR(64) NOT NULL DEFAULT ''UTC''',
+         'DO 0'
+       )`,
+      `PREPARE alter_users_timezone_default_stmt FROM @alter_users_timezone_default_sql`,
+      `EXECUTE alter_users_timezone_default_stmt`,
+      `DEALLOCATE PREPARE alter_users_timezone_default_stmt`,
+
+      `SET @needs_users_locale_default := (
+         SELECT COUNT(*)
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = 'users'
+           AND column_name = 'locale_code'
+           AND (column_default IS NULL OR column_default <> 'en-US')
+       )`,
+      `SET @alter_users_locale_default_sql := IF(
+         @needs_users_locale_default > 0,
+         'ALTER TABLE users MODIFY COLUMN locale_code VARCHAR(16) NOT NULL DEFAULT ''en-US''',
+         'DO 0'
+       )`,
+      `PREPARE alter_users_locale_default_stmt FROM @alter_users_locale_default_sql`,
+      `EXECUTE alter_users_locale_default_stmt`,
+      `DEALLOCATE PREPARE alter_users_locale_default_stmt`,
+
+      `SET @needs_events_timezone_default := (
+         SELECT COUNT(*)
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = 'events'
+           AND column_name = 'timezone_name'
+           AND (column_default IS NULL OR column_default <> 'UTC')
+       )`,
+      `SET @alter_events_timezone_default_sql := IF(
+         @needs_events_timezone_default > 0,
+         'ALTER TABLE events MODIFY COLUMN timezone_name VARCHAR(64) NOT NULL DEFAULT ''UTC''',
+         'DO 0'
+       )`,
+      `PREPARE alter_events_timezone_default_stmt FROM @alter_events_timezone_default_sql`,
+      `EXECUTE alter_events_timezone_default_stmt`,
+      `DEALLOCATE PREPARE alter_events_timezone_default_stmt`,
+    ],
+  },
 ];

@@ -1,4 +1,5 @@
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
+import { env } from '../../config/env.js';
 import { fromMysqlDateTime, nowUtc, toMysqlDateTime } from '../../lib/datetime.js';
 import { createPublicId } from '../../lib/ids.js';
 import { selectOne, withConnection, withTransaction } from '../../lib/mysqlUtils.js';
@@ -10,6 +11,7 @@ import type {
   AuthFlowRecord,
   AuthSessionRecord,
   AuthStore,
+  ClientTypeCode,
   LegalAcceptanceRecord,
   PendingChallenge,
 } from './types.js';
@@ -26,6 +28,7 @@ interface AccountRow extends RowDataPacket {
   phone_verified_at: string | Date | null;
   public_id: string;
   region: string | null;
+  client_type_code: string | null;
 }
 
 interface FlowRow extends RowDataPacket {
@@ -71,8 +74,15 @@ interface IdRow extends RowDataPacket {
   id: number;
 }
 
+interface AttemptRow extends RowDataPacket {
+  attempt_count: number;
+  id: number;
+}
+
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const normalizePhone = (value: string) => value.replace(/\s+/g, ' ').trim();
+const getActiveSessionLimitSql = () =>
+  String(Math.max(1, Math.trunc(env.MAX_ACTIVE_SESSIONS_PER_USER)));
 
 const splitName = (fullName: string) => {
   const parts = fullName.trim().split(/\s+/);
@@ -82,11 +92,80 @@ const splitName = (fullName: string) => {
   };
 };
 
-const toCountryValue = (value: string) => {
+const COUNTRY_LOCALIZATION_DEFAULTS: Record<string, { locale: string; timezone: string }> = {
+  AE: { locale: 'en-AE', timezone: 'Asia/Dubai' },
+  AU: { locale: 'en-AU', timezone: 'Australia/Sydney' },
+  CA: { locale: 'en-CA', timezone: 'America/Toronto' },
+  GB: { locale: 'en-GB', timezone: 'Europe/London' },
+  IN: { locale: 'en-IN', timezone: 'Asia/Kolkata' },
+  SG: { locale: 'en-SG', timezone: 'Asia/Singapore' },
+  US: { locale: 'en-US', timezone: 'America/New_York' },
+};
+
+const normalizePlatformSettingValue = (rawValue: unknown) => {
+  let parsed: unknown = null;
+
+  if (typeof rawValue === 'string') {
+    try {
+      parsed = JSON.parse(rawValue);
+    } catch {
+      return null;
+    }
+  } else if (rawValue && typeof rawValue === 'object') {
+    parsed = rawValue;
+  }
+
+  if (!parsed || typeof parsed !== 'object' || !Object.prototype.hasOwnProperty.call(parsed, 'value')) {
+    return null;
+  }
+
+  const value = (parsed as { value: unknown }).value;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+};
+
+export const normalizeClientTypeCode = (
+  value: string | null | undefined
+): ClientTypeCode => {
+  const normalized = value?.trim().toLowerCase();
+
+  if (normalized === 'business' || normalized === 'organization') {
+    return normalized;
+  }
+
+  return 'individual';
+};
+
+export const resolveAccountLocalizationDefaults = (
+  country: string | null | undefined,
+  platformTimezone: string | null | undefined,
+  platformLocale: string | null | undefined
+) => {
+  const countryCode = country?.trim() ? toCountryValue(country) : '';
+  const countryDefaults = countryCode ? COUNTRY_LOCALIZATION_DEFAULTS[countryCode] : undefined;
+
+  return {
+    locale: countryDefaults?.locale || platformLocale?.trim() || 'en-US',
+    timezone: countryDefaults?.timezone || platformTimezone?.trim() || 'UTC',
+  };
+};
+
+export const preserveVerifiedAt = (
+  currentValue: string | Date | null | undefined,
+  nextVerified: boolean,
+  timestamp: string
+) => {
+  if (currentValue) {
+    return currentValue;
+  }
+
+  return nextVerified ? timestamp : null;
+};
+
+const toCountryValue = (value: string, fallbackCountry = env.DEFAULT_PRICING_COUNTRY) => {
   const trimmed = value.trim();
 
   if (!trimmed) {
-    return 'IN';
+    return fallbackCountry;
   }
 
   const uppercase = trimmed.toUpperCase();
@@ -104,7 +183,7 @@ const toCountryValue = (value: string) => {
 
 const toPrimaryAddressValues = (
   address?: ClientPrimaryAddressRecord | null,
-  fallbackCountry = 'IN'
+  fallbackCountry = env.DEFAULT_PRICING_COUNTRY
 ) => ({
   city: address?.city.trim() || '',
   country: toCountryValue(address?.country || fallbackCountry),
@@ -120,6 +199,7 @@ const toPrimaryAddressValues = (
 const toPendingChallenge = (
   type: PendingChallenge['type'],
   row: {
+    attemptCount?: number;
     codeHash: string | null;
     expiresAt: string | Date | null;
     phoneSnapshot?: string | null;
@@ -143,6 +223,7 @@ const toPendingChallenge = (
   }
 
   return {
+    attemptCount: typeof row.attemptCount === 'number' ? row.attemptCount : 0,
     expiresAt: fromMysqlDateTime(row.expiresAt) || nowUtc(),
     lastSentAt: fromMysqlDateTime(row.sentAt) || nowUtc(),
     ...(row.codeHash ? { hashedCode: row.codeHash } : {}),
@@ -168,6 +249,37 @@ export class MysqlAuthStore implements AuthStore {
     );
 
     return row?.id;
+  }
+
+  private async getPlatformSettingString(connection: PoolConnection, settingKey: string) {
+    const row = await selectOne<RowDataPacket & { setting_value_json: unknown }>(
+      connection,
+      `SELECT setting_value_json
+       FROM platform_settings
+       WHERE setting_key = ?
+       LIMIT 1`,
+      [settingKey]
+    );
+
+    return row ? normalizePlatformSettingValue(row.setting_value_json) : null;
+  }
+
+  private async getNewUserLocalization(
+    connection: PoolConnection,
+    country: string,
+    address?: ClientPrimaryAddressRecord | null
+  ) {
+    const platformTimezone = await this.getPlatformSettingString(
+      connection,
+      'platform.default_timezone'
+    );
+    const platformLocale = await this.getPlatformSettingString(connection, 'platform.default_locale');
+
+    return resolveAccountLocalizationDefaults(
+      address?.country || country,
+      platformTimezone,
+      platformLocale
+    );
   }
 
   private async upsertPrimaryClientAddress(
@@ -262,6 +374,7 @@ export class MysqlAuthStore implements AuthStore {
     phone: string,
     fullName: string,
     country: string,
+    clientType: ClientTypeCode,
     primaryAddress?: ClientPrimaryAddressRecord | null
   ) {
     const existing = await selectOne<IdRow>(
@@ -281,13 +394,13 @@ export class MysqlAuthStore implements AuthStore {
 
       await connection.execute(
         `UPDATE client_accounts
-         SET legal_name = ?, display_name = ?, billing_name = ?, primary_email = ?, primary_phone = ?, updated_at = ?
+         SET primary_email = CASE WHEN primary_email = '' THEN ? ELSE primary_email END,
+             primary_phone = CASE WHEN primary_phone = '' AND ? <> '' THEN ? ELSE primary_phone END,
+             updated_at = ?
          WHERE id = ?`,
         [
-          fullName.trim(),
-          fullName.trim(),
-          fullName.trim(),
           normalizeEmail(email),
+          normalizePhone(phone),
           normalizePhone(phone),
           timestamp,
           existing.id,
@@ -295,12 +408,15 @@ export class MysqlAuthStore implements AuthStore {
       );
       await connection.execute(
         `UPDATE client_account_contacts
-         SET mobile_number = COALESCE(mobile_number, ?),
+         SET mobile_number = CASE
+               WHEN (mobile_number IS NULL OR mobile_number = '') AND ? <> '' THEN ?
+               ELSE mobile_number
+             END,
              updated_at = ?
          WHERE client_account_id = ?
            AND user_id = ?
            AND archived_at IS NULL`,
-        [normalizePhone(phone), timestamp, existing.id, userId]
+        [normalizePhone(phone), normalizePhone(phone), timestamp, existing.id, userId]
       );
 
       await this.upsertPrimaryClientAddress(connection, existing.id, country, primaryAddress);
@@ -319,7 +435,7 @@ export class MysqlAuthStore implements AuthStore {
       [
         createPublicId(),
         clientCode,
-        'individual',
+        clientType,
         fullName.trim(),
         fullName.trim(),
         fullName.trim(),
@@ -364,7 +480,12 @@ export class MysqlAuthStore implements AuthStore {
     return clientAccountId;
   }
 
-  private async hydrateAccount(connection: PoolConnection, whereClause: string, value: string) {
+  private async hydrateAccount(
+    connection: PoolConnection,
+    whereClause: string,
+    values: Array<string>,
+    extraJoin = ''
+  ) {
     const row = await selectOne<AccountRow>(
       connection,
       `SELECT
@@ -377,13 +498,15 @@ export class MysqlAuthStore implements AuthStore {
          u.email_verified_at,
          u.phone_verified_at,
          uc.password_hash,
-         COALESCE(addr.country_code, 'IN') AS region,
+         COALESCE(addr.country_code, ?) AS region,
+         ca.client_type_code,
          CASE WHEN EXISTS (
            SELECT 1
            FROM user_oauth_accounts uoa
            WHERE uoa.user_id = u.id AND uoa.provider_code = 'google'
          ) THEN 1 ELSE 0 END AS has_google
        FROM users u
+       ${extraJoin}
        LEFT JOIN user_credentials uc ON uc.user_id = u.id
        LEFT JOIN client_account_contacts cac
          ON cac.user_id = u.id
@@ -397,7 +520,7 @@ export class MysqlAuthStore implements AuthStore {
          AND addr.archived_at IS NULL
        WHERE ${whereClause}
        LIMIT 1`,
-      [value]
+      [env.DEFAULT_PRICING_COUNTRY, ...values]
     );
 
     if (!row) {
@@ -406,7 +529,7 @@ export class MysqlAuthStore implements AuthStore {
 
     return {
       createdAt: fromMysqlDateTime(row.created_at) || nowUtc(),
-      country: row.region || 'IN',
+      country: row.region || env.DEFAULT_PRICING_COUNTRY,
       email: row.email,
       fullName: row.display_name,
       id: row.public_id,
@@ -415,6 +538,7 @@ export class MysqlAuthStore implements AuthStore {
       lastLoginAt: fromMysqlDateTime(row.last_login_at),
       passwordHash: row.password_hash || '',
       phone: row.phone || '',
+      clientType: normalizeClientTypeCode(row.client_type_code),
       provider: (row.has_google ? 'google' : 'email') as AuthAccountRecord['provider'],
     } satisfies AuthAccountRecord;
   }
@@ -486,7 +610,7 @@ export class MysqlAuthStore implements AuthStore {
     await this.initialize();
 
     return withConnection(this.pool, (connection) =>
-      this.hydrateAccount(connection, 'u.email = ?', normalizeEmail(email))
+      this.hydrateAccount(connection, 'u.email = ?', [normalizeEmail(email)])
     );
   }
 
@@ -494,7 +618,20 @@ export class MysqlAuthStore implements AuthStore {
     await this.initialize();
 
     return withConnection(this.pool, (connection) =>
-      this.hydrateAccount(connection, 'u.public_id = ?', id)
+      this.hydrateAccount(connection, 'u.public_id = ?', [id])
+    );
+  }
+
+  public async getAccountByOAuthSubject(providerCode: AuthAccountRecord['provider'], providerSubject: string) {
+    await this.initialize();
+
+    return withConnection(this.pool, (connection) =>
+      this.hydrateAccount(
+        connection,
+        'oauth_match.provider_code = ? AND oauth_match.provider_subject = ?',
+        [providerCode, providerSubject],
+        `INNER JOIN user_oauth_accounts oauth_match ON oauth_match.user_id = u.id`
+      )
     );
   }
 
@@ -508,7 +645,7 @@ export class MysqlAuthStore implements AuthStore {
     await this.initialize();
 
     return withConnection(this.pool, (connection) =>
-      this.hydrateAccount(connection, 'u.phone = ?', normalizedPhone)
+      this.hydrateAccount(connection, 'u.phone = ?', [normalizedPhone])
     );
   }
 
@@ -569,6 +706,7 @@ export class MysqlAuthStore implements AuthStore {
         accountId: row.account_public_id,
         createdAt: fromMysqlDateTime(row.created_at) || nowUtc(),
         emailChallenge: toPendingChallenge('email', {
+          attemptCount: Number(row.email_attempt_count || 0),
           codeHash: row.email_code_hash,
           expiresAt: row.email_expires_at,
           sentAt: row.email_sent_at,
@@ -576,11 +714,13 @@ export class MysqlAuthStore implements AuthStore {
         expiresAt,
         hashedToken: row.flow_token_hash,
         passwordResetChallenge: toPendingChallenge('password-reset', {
+          attemptCount: Number(row.password_attempt_count || 0),
           codeHash: row.password_code_hash,
           expiresAt: row.password_expires_at,
           sentAt: row.password_sent_at,
         }),
         phoneChallenge: toPendingChallenge('phone', {
+          attemptCount: Number(row.phone_attempt_count || 0),
           codeHash: row.phone_code_hash,
           expiresAt: row.phone_expires_at,
           phoneSnapshot: row.phone_snapshot,
@@ -591,6 +731,63 @@ export class MysqlAuthStore implements AuthStore {
         purpose: row.purpose_code as AuthFlowRecord['purpose'],
         rememberMe: Boolean(row.remember_me),
       } satisfies AuthFlowRecord;
+    });
+  }
+
+  public async incrementFlowChallengeAttempt(
+    hashedToken: string,
+    challengeType: PendingChallenge['type']
+  ) {
+    await this.initialize();
+
+    const challengeConfig = (() => {
+      if (challengeType === 'email') {
+        return {
+          flowColumn: 'email_token_id',
+          tableName: 'email_verification_tokens',
+        };
+      }
+
+      if (challengeType === 'phone') {
+        return {
+          flowColumn: 'phone_token_id',
+          tableName: 'phone_verification_tokens',
+        };
+      }
+
+      return {
+        flowColumn: 'password_reset_token_id',
+        tableName: 'password_reset_tokens',
+      };
+    })();
+
+    return withTransaction(this.pool, async (connection) => {
+      const row = await selectOne<AttemptRow>(
+        connection,
+        `SELECT token.id, token.attempt_count
+           FROM ${challengeConfig.tableName} token
+           INNER JOIN auth_flows af ON af.${challengeConfig.flowColumn} = token.id
+          WHERE af.flow_token_hash = ?
+            AND token.consumed_at IS NULL
+          LIMIT 1
+          FOR UPDATE`,
+        [hashedToken]
+      );
+
+      if (!row) {
+        return 0;
+      }
+
+      const nextAttemptCount = Number(row.attempt_count || 0) + 1;
+      await connection.execute(
+        `UPDATE ${challengeConfig.tableName}
+            SET attempt_count = ?,
+                updated_at = ?
+          WHERE id = ?`,
+        [nextAttemptCount, toMysqlDateTime(nowUtc()), row.id]
+      );
+
+      return nextAttemptCount;
     });
   }
 
@@ -635,59 +832,6 @@ export class MysqlAuthStore implements AuthStore {
         lastSeenAt: fromMysqlDateTime(row.last_seen_at) || nowUtc(),
         rememberMe: Boolean(row.remember_me),
       } satisfies AuthSessionRecord;
-    });
-  }
-
-  public async listAccounts() {
-    await this.initialize();
-
-    return withConnection(this.pool, async (connection) => {
-      const [rows] = await connection.query<AccountRow[]>(
-        `SELECT
-           u.public_id,
-           u.email,
-           u.phone,
-           u.display_name,
-           u.created_at,
-           u.last_login_at,
-           u.email_verified_at,
-           u.phone_verified_at,
-           uc.password_hash,
-           COALESCE(addr.country_code, 'IN') AS region,
-           CASE WHEN EXISTS (
-             SELECT 1
-             FROM user_oauth_accounts uoa
-             WHERE uoa.user_id = u.id AND uoa.provider_code = 'google'
-           ) THEN 1 ELSE 0 END AS has_google
-         FROM users u
-         LEFT JOIN user_credentials uc ON uc.user_id = u.id
-         LEFT JOIN client_account_contacts cac
-           ON cac.user_id = u.id
-           AND cac.archived_at IS NULL
-         LEFT JOIN client_accounts ca
-           ON ca.id = cac.client_account_id
-           AND ca.archived_at IS NULL
-         LEFT JOIN client_addresses addr
-           ON addr.client_account_id = ca.id
-           AND addr.is_primary = 1
-           AND addr.archived_at IS NULL
-         WHERE u.actor_type_code = 'client'
-         ORDER BY u.created_at ASC`
-      );
-
-      return rows.map((row) => ({
-        createdAt: fromMysqlDateTime(row.created_at) || nowUtc(),
-        country: row.region || 'IN',
-        email: row.email,
-        fullName: row.display_name,
-        id: row.public_id,
-        isEmailVerified: Boolean(row.email_verified_at),
-        isPhoneVerified: Boolean(row.phone_verified_at),
-        lastLoginAt: fromMysqlDateTime(row.last_login_at),
-        passwordHash: row.password_hash || '',
-        phone: row.phone || '',
-        provider: (row.has_google ? 'google' : 'email') as AuthAccountRecord['provider'],
-      }));
     });
   }
 
@@ -783,6 +927,7 @@ export class MysqlAuthStore implements AuthStore {
 
     await withTransaction(this.pool, async (connection) => {
       const timestamp = toMysqlDateTime(nowUtc());
+      const activeSessionLimit = getActiveSessionLimitSql();
       const normalizedEmail = normalizeEmail(account.email);
       const normalizedPhone = normalizePhone(account.phone);
       let userId = await this.getUserIdByPublicId(connection, account.id);
@@ -799,6 +944,11 @@ export class MysqlAuthStore implements AuthStore {
       const { firstName, lastName } = splitName(account.fullName);
 
       if (!userId) {
+        const localization = await this.getNewUserLocalization(
+          connection,
+          account.country,
+          options?.primaryAddress
+        );
         const [result] = await connection.execute(
           `INSERT INTO users (
             public_id, email, phone, display_name, first_name, last_name, actor_type_code,
@@ -814,8 +964,8 @@ export class MysqlAuthStore implements AuthStore {
             lastName,
             'client',
             'active',
-            'Asia/Kolkata',
-            'en-IN',
+            localization.timezone,
+            localization.locale,
             '',
             1,
             account.lastLoginAt ? toMysqlDateTime(account.lastLoginAt) : null,
@@ -830,18 +980,38 @@ export class MysqlAuthStore implements AuthStore {
       } else {
         await connection.execute(
           `UPDATE users
-           SET email = ?, phone = ?, display_name = ?, first_name = ?, last_name = ?, last_login_at = ?,
-               email_verified_at = ?, phone_verified_at = ?, updated_at = ?, login_enabled = ?
+           SET email = CASE WHEN email = '' THEN ? ELSE email END,
+               phone = CASE WHEN (phone IS NULL OR phone = '') AND ? <> '' THEN ? ELSE phone END,
+               display_name = CASE WHEN display_name = '' THEN ? ELSE display_name END,
+               first_name = CASE WHEN first_name = '' THEN ? ELSE first_name END,
+               last_name = CASE WHEN (last_name IS NULL OR last_name = '') AND ? IS NOT NULL THEN ? ELSE last_name END,
+               last_login_at = COALESCE(?, last_login_at),
+               email_verified_at = CASE
+                 WHEN email_verified_at IS NOT NULL THEN email_verified_at
+                 WHEN ? = 1 THEN ?
+                 ELSE email_verified_at
+               END,
+               phone_verified_at = CASE
+                 WHEN phone_verified_at IS NOT NULL THEN phone_verified_at
+                 WHEN ? = 1 THEN ?
+                 ELSE phone_verified_at
+               END,
+               updated_at = ?,
+               login_enabled = ?
            WHERE id = ?`,
           [
             normalizedEmail,
             normalizedPhone || null,
+            normalizedPhone || null,
             account.fullName.trim(),
             firstName,
             lastName,
+            lastName,
             account.lastLoginAt ? toMysqlDateTime(account.lastLoginAt) : null,
-            account.isEmailVerified ? timestamp : null,
-            account.isPhoneVerified ? timestamp : null,
+            account.isEmailVerified ? 1 : 0,
+            timestamp,
+            account.isPhoneVerified ? 1 : 0,
+            timestamp,
             timestamp,
             1,
             userId,
@@ -870,6 +1040,7 @@ export class MysqlAuthStore implements AuthStore {
         normalizedPhone || '',
         account.fullName,
         account.country,
+        normalizeClientTypeCode(account.clientType),
         options?.primaryAddress
       );
 
@@ -897,8 +1068,7 @@ export class MysqlAuthStore implements AuthStore {
             public_id, user_id, provider_code, provider_subject, provider_email, linked_at, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
-            provider_email = VALUES(provider_email),
-            linked_at = VALUES(linked_at),
+            provider_email = COALESCE(provider_email, VALUES(provider_email)),
             updated_at = VALUES(updated_at)`,
           [
             createPublicId(),
@@ -985,6 +1155,8 @@ export class MysqlAuthStore implements AuthStore {
       }
 
       const timestamp = toMysqlDateTime(nowUtc());
+      const activeSessionLimit = getActiveSessionLimitSql();
+
       await connection.execute(
         `INSERT INTO user_sessions (
           public_id, user_id, session_token_hash, csrf_secret_hash, remember_me, ip_address,
@@ -1011,6 +1183,36 @@ export class MysqlAuthStore implements AuthStore {
           toMysqlDateTime(session.createdAt),
           timestamp,
         ]
+      );
+
+      await connection.execute(
+        `UPDATE user_sessions
+            SET revoked_at = COALESCE(revoked_at, ?),
+                updated_at = ?
+          WHERE user_id = ?
+            AND revoked_at IS NULL
+            AND expires_at <= UTC_TIMESTAMP(6)`,
+        [timestamp, timestamp, userId]
+      );
+
+      await connection.execute(
+        `UPDATE user_sessions
+            SET revoked_at = ?,
+                updated_at = ?
+          WHERE user_id = ?
+            AND revoked_at IS NULL
+            AND id NOT IN (
+              SELECT id FROM (
+                SELECT id
+                  FROM user_sessions
+                 WHERE user_id = ?
+                   AND revoked_at IS NULL
+                   AND expires_at > UTC_TIMESTAMP(6)
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT ${activeSessionLimit}
+              ) keep_sessions
+            )`,
+        [timestamp, timestamp, userId, userId]
       );
 
       await connection.execute(

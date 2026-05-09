@@ -49,6 +49,10 @@ interface ClientAccountIdRow extends RowDataPacket {
   client_account_id: number;
 }
 
+interface CurrentClientAccountAccessRow extends RowDataPacket {
+  client_account_id: number;
+}
+
 interface ClientContactRow extends RowDataPacket {
   contact_role_code: string;
   display_name: string;
@@ -629,6 +633,52 @@ export class DomainRepository {
     return withConnection(this.pool, async (connection) =>
       this.listRefundsInternal(connection, clientAccountId)
     );
+  }
+
+  public async assertCurrentClientAccountAccess(userPublicId: string, clientAccountId: number) {
+    await this.initialize();
+
+    return withConnection(this.pool, async (connection) =>
+      this.assertCurrentClientAccountAccessInternal(connection, userPublicId, clientAccountId)
+    );
+  }
+
+  private async assertCurrentClientAccountAccessInternal(
+    connection: PoolConnection,
+    userPublicId: string,
+    clientAccountId: number
+  ) {
+    const access = await selectOne<CurrentClientAccountAccessRow>(
+      connection,
+      `SELECT ca.id AS client_account_id
+       FROM users u
+       INNER JOIN user_roles ur
+         ON ur.user_id = u.id
+        AND ur.role_code = 'client'
+        AND ur.is_active = 1
+        AND (ur.starts_at IS NULL OR ur.starts_at <= UTC_TIMESTAMP(6))
+        AND (ur.ends_at IS NULL OR ur.ends_at > UTC_TIMESTAMP(6))
+       INNER JOIN client_account_contacts cac
+         ON cac.user_id = u.id
+        AND cac.client_account_id = ?
+        AND cac.portal_access_enabled = 1
+        AND cac.archived_at IS NULL
+       INNER JOIN client_accounts ca
+         ON ca.id = cac.client_account_id
+        AND ca.archived_at IS NULL
+       WHERE u.public_id = ?
+         AND u.actor_type_code = 'client'
+         AND u.login_enabled = 1
+         AND u.archived_at IS NULL
+       LIMIT 1`,
+      [clientAccountId, userPublicId]
+    );
+
+    if (!access) {
+      throw forbidden('client_account_access_revoked', 'You do not have access to this client account.');
+    }
+
+    return Number(access.client_account_id);
   }
 
 

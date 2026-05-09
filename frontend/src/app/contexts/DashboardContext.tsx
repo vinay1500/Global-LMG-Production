@@ -238,10 +238,7 @@ export const DashboardProvider: React.FC<{ children: ReactNode }> = ({ children 
         documentUploadIds = uploadedDocuments.map((entry) => entry.upload.id);
       }
 
-      const snapshot = await dashboardApi.submitRequest(request, documentUploadIds);
-      const nextNotifications = await dashboardApi.getNotifications();
-      setDashboardState(normalizeSnapshot(snapshot, currentUser || EMPTY_CLIENT));
-      setNotifications(asArray(nextNotifications));
+      return await dashboardApi.submitRequest(request, documentUploadIds);
     } catch (error) {
       const authError = await resolveAuthExpiry(error);
       const message =

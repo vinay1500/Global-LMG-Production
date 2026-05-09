@@ -12,6 +12,7 @@ import {
   type CountryPricingRow,
   type UrgencyPricingRow,
 } from '../../backend/src/modules/dashboard/normalizedRepository.js';
+import { convertBaseAmount } from '../../backend/src/modules/pricing/fx.js';
 
 const countryPricing = {
   country_code: 'US',
@@ -57,16 +58,16 @@ const modes = [
 ] as ConsultationModePricingRow[];
 
 describe('request pricing calculation', () => {
-  it('uses exact country overrides before multipliers', () => {
+  it('keeps country overrides and multipliers out of official USD pricing', () => {
     const overrides = buildPriceOverrideMap([
       override({ price_amount: '399.00', subject_code: 'coordination' }),
     ]);
 
-    expect(resolveFlatPrice(overrides, 'service', 'coordination', 100, 1.25)).toBe(399);
-    expect(resolveFlatPrice(overrides, 'service', 'other-service', 100, 1.25)).toBe(125);
+    expect(resolveFlatPrice(overrides, 'service', 'coordination', 100, 1.25)).toBe(100);
+    expect(resolveFlatPrice(overrides, 'service', 'other-service', 100, 1.25)).toBe(100);
   });
 
-  it('resolves currency from exact country overrides when they are consistent', () => {
+  it('resolves official request pricing currency to USD only', () => {
     expect(resolvePricingCurrency(countryPricing, [override({ currency_code: 'USD' })])).toBe('USD');
     expect(
       resolvePricingCurrency(countryPricing, [
@@ -90,6 +91,19 @@ describe('request pricing calculation', () => {
       serviceTotal: 375.5,
       total: 488.05,
       urgencyFee: 37.55,
+    });
+  });
+
+  it('does not convert official payable amounts into local currency', async () => {
+    const snapshot = await convertBaseAmount({} as never, 120, 'INR');
+
+    expect(snapshot).toMatchObject({
+      amount: 120,
+      currencyCode: 'USD',
+      exchangeRate: null,
+      originalAmount: null,
+      originalCurrencyCode: null,
+      source: 'base_currency',
     });
   });
 

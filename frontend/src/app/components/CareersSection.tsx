@@ -2,8 +2,9 @@ import React from 'react';
 import { ArrowRight, GraduationCap, Briefcase, Users } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useNavigate } from 'react-router';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { CAREERS_FORM_LINK } from '../config/launchLinks';
 import { CAREER_CATEGORIES, CAREERS_HOME_SECTION } from '../content/site/careers';
+import { ExternalFormCta } from './shared/ExternalFormCta';
 
  
 const CAREER_ICON_MAP = {
@@ -84,15 +85,13 @@ export const CareersSection = () => {
           </div>
           
           
-          <a
-            href={CLIENT_INTAKE_HREF}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
+          <ExternalFormCta
+            formLink={CAREERS_FORM_LINK}
+            fallbackClassName="relative z-10 max-w-sm text-sm leading-relaxed text-gray-300"
             className="relative z-10 px-10 py-5 bg-white text-black font-bold uppercase tracking-widest text-xs hover:bg-gray-100 transition-colors whitespace-nowrap"
           >
             {CAREERS_HOME_SECTION.ctaButtonLabel}
-          </a>
+          </ExternalFormCta>
           {/* Decorative element */}
           <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/20 blur-[100px] -mr-32 -mt-32" />
         </div>

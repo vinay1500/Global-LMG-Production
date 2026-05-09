@@ -34,6 +34,29 @@ const safeJson = (value: unknown) => JSON.stringify(value ?? {});
 const getFirst = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] || '' : value || '';
 
+const maskEmail = (value: string | null | undefined) => {
+  if (!value || !value.includes('@')) {
+    return null;
+  }
+
+  const [localPart = '', domain = ''] = value.split('@');
+  const visibleLocal = localPart.slice(0, 2);
+  return `${visibleLocal}${localPart.length > 2 ? '***' : '*'}@${domain}`;
+};
+
+const maskPhone = (value: string | null | undefined) => {
+  if (!value) {
+    return null;
+  }
+
+  const digits = value.replace(/\D/g, '');
+  if (digits.length <= 4) {
+    return '****';
+  }
+
+  return `***${digits.slice(-4)}`;
+};
+
 const constantTimeEquals = (left: Buffer, right: Buffer) =>
   left.length === right.length && timingSafeEqual(left, right);
 
@@ -195,6 +218,59 @@ const extractResendRecipient = (payload: ResendWebhookPayload) => {
   return to || null;
 };
 
+export const buildResendEventPayloadSnapshot = (
+  payload: ResendWebhookPayload,
+  derived: {
+    deliveryStatus: string;
+    eventType: string;
+    providerEventId: string | null;
+    providerMessageId: string | null;
+    recipientEmail: string | null;
+  }
+) => ({
+  deliveryStatus: derived.deliveryStatus,
+  eventType: derived.eventType,
+  provider: 'resend',
+  providerCreatedAt: truncate(payload.created_at, 64),
+  providerEventId: derived.providerEventId,
+  providerMessageId: derived.providerMessageId,
+  recipientEmailMasked: maskEmail(derived.recipientEmail),
+  retention: 'minimized_90_days',
+});
+
+export const buildTwilioEventPayloadSnapshot = (
+  params: Record<string, string>,
+  derived: {
+    deliveryStatus: string;
+    eventType: string;
+    fromPhone: string | null;
+    messageSid: string | null;
+    toPhone: string | null;
+  }
+) => ({
+  deliveryStatus: derived.deliveryStatus,
+  errorCode: truncate(params.ErrorCode, 64),
+  eventType: derived.eventType,
+  fromPhoneMasked: maskPhone(derived.fromPhone),
+  provider: 'twilio',
+  providerMessageId: derived.messageSid,
+  retention: 'minimized_90_days',
+  toPhoneMasked: maskPhone(derived.toPhone),
+});
+
+export const TWILIO_SMS_EVENT_UPSERT_SQL = `INSERT INTO sms_events (
+       public_id, provider_code, provider_message_id, event_type_code, delivery_status_code,
+       to_phone, from_phone, error_code, error_message, payload_json, received_at, created_at
+     ) VALUES (?, 'twilio', ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+     ON DUPLICATE KEY UPDATE
+       delivery_status_code = VALUES(delivery_status_code),
+       to_phone = VALUES(to_phone),
+       from_phone = VALUES(from_phone),
+       error_code = VALUES(error_code),
+       error_message = VALUES(error_message),
+       payload_json = VALUES(payload_json),
+       received_at = UTC_TIMESTAMP(6)`;
+
 export const handleResendWebhook = async (input: {
   headers: {
     id?: string;
@@ -222,6 +298,7 @@ export const handleResendWebhook = async (input: {
   const providerEventId = truncate(parsedPayload.id || input.headers.id, 160);
   const providerMessageId = truncate(parsedPayload.data?.email_id, 160);
   const deliveryStatus = mapResendStatus(eventType);
+  const recipientEmail = truncate(extractResendRecipient(parsedPayload), 255);
 
   await executeStatement(
     `INSERT INTO email_events (
@@ -241,8 +318,16 @@ export const handleResendWebhook = async (input: {
       providerMessageId,
       eventType,
       deliveryStatus,
-      truncate(extractResendRecipient(parsedPayload), 255),
-      safeJson(parsedPayload),
+      recipientEmail,
+      safeJson(
+        buildResendEventPayloadSnapshot(parsedPayload, {
+          deliveryStatus,
+          eventType,
+          providerEventId,
+          providerMessageId,
+          recipientEmail,
+        })
+      ),
     ]
   );
 
@@ -270,22 +355,29 @@ export const handleTwilioStatusWebhook = async (request: Request) => {
   const eventType = truncate(params.MessageStatus || params.SmsStatus || 'status_callback', 80) ||
     'status_callback';
   const deliveryStatus = mapTwilioStatus(eventType);
+  const toPhone = truncate(params.To, 64);
+  const fromPhone = truncate(params.From, 64);
 
   await executeStatement(
-    `INSERT INTO sms_events (
-       public_id, provider_code, provider_message_id, event_type_code, delivery_status_code,
-       to_phone, from_phone, error_code, error_message, payload_json, received_at, created_at
-     ) VALUES (?, 'twilio', ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
+    TWILIO_SMS_EVENT_UPSERT_SQL,
     [
       createPublicId(),
       messageSid,
       eventType,
       deliveryStatus,
-      truncate(params.To, 64),
-      truncate(params.From, 64),
+      toPhone,
+      fromPhone,
       truncate(params.ErrorCode, 64),
       truncate(params.ErrorMessage, 255),
-      safeJson(params),
+      safeJson(
+        buildTwilioEventPayloadSnapshot(params, {
+          deliveryStatus,
+          eventType,
+          fromPhone,
+          messageSid,
+          toPhone,
+        })
+      ),
     ]
   );
 

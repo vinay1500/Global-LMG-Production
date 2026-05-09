@@ -1,4 +1,5 @@
 export type AuthProvider = 'email' | 'google';
+export type ClientTypeCode = 'business' | 'individual' | 'organization';
 
 export interface AuthAccountRecord {
   id: string;
@@ -7,6 +8,7 @@ export interface AuthAccountRecord {
   phone: string;
   oauthSubject?: string;
   country: string;
+  clientType?: ClientTypeCode;
   passwordHash: string;
   provider: AuthProvider;
   isEmailVerified: boolean;
@@ -50,6 +52,7 @@ export type PhoneChallengeProvider = 'preview' | 'twilio' | 'twilio-verify';
 
 export interface PendingChallenge {
   type: ChallengeType;
+  attemptCount?: number;
   expiresAt: string;
   hashedCode?: string;
   lastSentAt: string;
@@ -105,10 +108,17 @@ export interface AuthStore {
   deleteSessionsByAccountId: (accountId: string) => Promise<void>;
   getAccountByEmail: (email: string) => Promise<AuthAccountRecord | undefined>;
   getAccountById: (id: string) => Promise<AuthAccountRecord | undefined>;
+  getAccountByOAuthSubject: (
+    providerCode: AuthProvider,
+    providerSubject: string
+  ) => Promise<AuthAccountRecord | undefined>;
   getAccountByPhone: (phone: string) => Promise<AuthAccountRecord | undefined>;
   getFlowByHashedToken: (hashedToken: string) => Promise<AuthFlowRecord | undefined>;
   getSessionByHashedToken: (hashedToken: string) => Promise<AuthSessionRecord | undefined>;
-  listAccounts: () => Promise<AuthAccountRecord[]>;
+  incrementFlowChallengeAttempt: (
+    hashedToken: string,
+    challengeType: ChallengeType
+  ) => Promise<number>;
   saveAccount: (
     account: AuthAccountRecord,
     options?: { legalAcceptance?: LegalAcceptanceRecord; primaryAddress?: ClientPrimaryAddressRecord }

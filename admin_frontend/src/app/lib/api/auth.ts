@@ -1,5 +1,8 @@
 import type {
   AdminAccountResponse,
+  AdminMfaDisableResponse,
+  AdminMfaEnrollmentStartResponse,
+  AdminMfaEnrollmentVerifyResponse,
   AdminPasswordChangeResponse,
   AdminPasswordResetConfirmResponse,
   AdminPasswordResetRequestResponse,
@@ -22,6 +25,8 @@ const postJson = <TResponse>(url: string, payload?: unknown) =>
 export const authApi = {
   changePassword: (payload: { currentPassword: string; newPassword: string }) =>
     postJson<AdminPasswordChangeResponse>(API_ENDPOINTS.admin.auth.password(), payload),
+  disableMfa: (payload: { code: string; currentPassword: string }) =>
+    postJson<AdminMfaDisableResponse>(API_ENDPOINTS.admin.auth.mfaDisable(), payload),
   confirmPasswordReset: (payload: { code: string; newPassword: string; token: string }) =>
     postJson<AdminPasswordResetConfirmResponse>(
       API_ENDPOINTS.admin.auth.passwordResetConfirm(),
@@ -29,6 +34,15 @@ export const authApi = {
     ),
   getAccount: () => apiRequest<AdminAccountResponse>(API_ENDPOINTS.admin.auth.me()),
   getSession: () => apiRequest<AdminSessionResponse>(API_ENDPOINTS.admin.auth.session()),
+  startMfaEnrollment: () =>
+    postJson<AdminMfaEnrollmentStartResponse>(API_ENDPOINTS.admin.auth.mfaEnrollment()),
+  verifyMfaEnrollment: (payload: { code: string }) =>
+    postJson<AdminMfaEnrollmentVerifyResponse>(
+      API_ENDPOINTS.admin.auth.mfaEnrollmentVerify(),
+      payload
+    ),
+  verifyMfaSignIn: (payload: { code: string; mfaToken: string }) =>
+    postJson<AdminSessionResponse>(API_ENDPOINTS.admin.auth.mfaSignIn(), payload),
   requestPasswordReset: (payload: { identifier: string }) =>
     postJson<AdminPasswordResetRequestResponse>(
       API_ENDPOINTS.admin.auth.passwordResetRequest(),

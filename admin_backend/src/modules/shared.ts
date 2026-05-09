@@ -70,6 +70,25 @@ type MatterRow = RowDataPacket & {
   urgency: string;
 };
 
+type MatterOptionRow = RowDataPacket & {
+  clientId: string;
+  clientName: string;
+  consultationMode: string | null;
+  createdAt: string;
+  dueAmount: number | null;
+  expertiseArea: string | null;
+  id: string;
+  issueSummary: string | null;
+  lastUpdated: string;
+  lifecycleStage: string | null;
+  matterNumber: string;
+  operationalStatus: string | null;
+  paidAmount: number | null;
+  title: string;
+  totalFee: number | null;
+  urgency: string | null;
+};
+
 type ServiceRow = RowDataPacket & { dbId: number; serviceCode: string };
 type UpdateRow = RowDataPacket & { bodyText: string; dbId: number; visibleToClient: number };
 type MatterAssignmentSummaryRow = RowDataPacket & {
@@ -139,6 +158,23 @@ type InvoiceLineTaxRow = RowDataPacket & {
   name: string;
   percent: number;
   taxableAmount: number;
+};
+
+type InvoiceSummaryRow = RowDataPacket & {
+  clientId: string;
+  clientName: string;
+  currencyCode: string;
+  discount: number;
+  dueDate: string;
+  id: string;
+  issueDate: string;
+  matterId: string | null;
+  matterRef: string | null;
+  matterTitle: string | null;
+  status: string;
+  subtotal: number;
+  tax: number;
+  totalAmount: number;
 };
 
 type DocumentRow = RowDataPacket & {
@@ -225,6 +261,19 @@ type PaymentRow = RowDataPacket & {
   reference: string | null;
   status: 'failed' | 'refunded' | 'success';
   timestamp: string;
+};
+
+type ClientOptionRow = RowDataPacket & {
+  accountStatusCode: string;
+  email: string;
+  id: string;
+  joinedAt: string;
+  lastActiveAt: string | null;
+  lifecycleSource: string;
+  name: string;
+  owner: string | null;
+  phone: string;
+  region: string | null;
 };
 
 type AuditRow = RowDataPacket & {
@@ -430,6 +479,81 @@ export const fetchMatters = async (filters: {
     totalFee: row.totalFee,
     urgency: row.urgency,
   }));
+};
+
+export const fetchMatterOptions = async (filters: {
+  clientAccountIds?: string[];
+  limit?: number;
+  offset?: number;
+} = {}) => {
+  const where: string[] = ['m.archived_at IS NULL'];
+  const params: unknown[] = [];
+
+  if (filters.clientAccountIds?.length) {
+    where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
+    params.push(...filters.clientAccountIds);
+  }
+
+  const rows = await queryRows<MatterOptionRow>(
+    `SELECT
+       m.public_id AS id,
+       ca.public_id AS clientId,
+       ca.display_name AS clientName,
+       m.title,
+       m.matter_number AS matterNumber,
+       m.current_stage_code AS lifecycleStage,
+       m.operational_status_code AS operationalStatus,
+       ld.domain_name AS expertiseArea,
+       m.issue_summary AS issueSummary,
+       pur.urgency_code AS urgency,
+       m.consultation_mode_code AS consultationMode,
+       m.quoted_total_amount AS totalFee,
+       m.paid_total_amount AS paidAmount,
+       m.due_total_amount AS dueAmount,
+       m.opened_at AS createdAt,
+       m.last_activity_at AS lastUpdated
+     FROM matters m
+     JOIN client_accounts ca ON ca.id = m.client_account_id
+     LEFT JOIN legal_domains ld ON ld.id = m.legal_domain_id
+     LEFT JOIN pricing_urgency_rules pur ON pur.id = m.urgency_rule_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY m.last_activity_at DESC
+     ${filters.limit ? 'LIMIT ? OFFSET ?' : ''}`,
+    filters.limit ? [...params, filters.limit, filters.offset ?? 0] : params
+  );
+
+  return rows.map((row) => {
+    const lifecycleStage = row.lifecycleStage || 'request-received';
+    const urgency = row.urgency || 'standard';
+
+    return {
+      assignedCounsel: undefined,
+      assignedStaff: undefined,
+      assignments: [],
+      clientId: row.clientId,
+      clientName: row.clientName,
+      clientVisibleNotes: [],
+      consultationMode: row.consultationMode || 'video',
+      createdAt: toUiDate(row.createdAt),
+      dueAmount: Number(row.dueAmount || 0),
+      expertiseArea: row.expertiseArea || '',
+      id: row.id,
+      internalNotes: [],
+      issueSummary: row.issueSummary || '',
+      lastUpdated: toUiDate(row.lastUpdated),
+      lifecycleStage,
+      meetingLink: undefined,
+      operationalStatus: row.operationalStatus || 'open',
+      paidAmount: Number(row.paidAmount || 0),
+      priority: mapMatterPriority(row.operationalStatus || 'open', urgency),
+      referenceCode: row.matterNumber,
+      selectedServices: [],
+      stages: buildMatterStages(lifecycleStage),
+      title: row.title,
+      totalFee: Number(row.totalFee || 0),
+      urgency,
+    };
+  });
 };
 
 export const countMatters = async (filters: {
@@ -682,6 +806,75 @@ export const countInvoices = async (filters: { clientAccountIds?: string[]; matt
   );
 
   return Number(rows[0]?.total || 0);
+};
+
+export const fetchInvoiceSummaries = async (filters: {
+  clientAccountIds?: string[];
+  limit?: number;
+  matterIds?: string[];
+  offset?: number;
+}) => {
+  const where: string[] = ['inv.archived_at IS NULL'];
+  const params: unknown[] = [];
+
+  if (filters.clientAccountIds?.length) {
+    where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
+    params.push(...filters.clientAccountIds);
+  }
+
+  if (filters.matterIds?.length) {
+    where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
+    params.push(...filters.matterIds);
+  }
+
+  const rows = await queryRows<InvoiceSummaryRow>(
+    `SELECT
+       inv.public_id AS id,
+       ca.public_id AS clientId,
+       ca.display_name AS clientName,
+       m.public_id AS matterId,
+       m.matter_number AS matterRef,
+       m.title AS matterTitle,
+       inv.subtotal_amount AS subtotal,
+       inv.currency_code AS currencyCode,
+       inv.tax_amount AS tax,
+       inv.discount_amount AS discount,
+       inv.total_amount AS totalAmount,
+       inv.status_code AS status,
+       inv.issue_date AS issueDate,
+       inv.due_date AS dueDate
+     FROM invoices inv
+     JOIN client_accounts ca ON ca.id = inv.client_account_id
+     LEFT JOIN matters m ON m.id = inv.matter_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY inv.issue_date DESC, inv.created_at DESC
+     ${filters.limit ? 'LIMIT ? OFFSET ?' : ''}`,
+    filters.limit ? [...params, filters.limit, filters.offset ?? 0] : params
+  );
+
+  return rows.map((row) => ({
+    amount: row.subtotal,
+    billingSnapshot: null,
+    business: undefined,
+    clientId: row.clientId,
+    clientName: row.clientName,
+    currencyCode: row.currencyCode || 'USD',
+    discount: row.discount,
+    dueDate: toUiDate(row.dueDate),
+    id: row.id,
+    internalNote: undefined,
+    issueDate: toUiDate(row.issueDate),
+    items: [],
+    lastReminder: undefined,
+    matterId: row.matterId || '',
+    matterRef: row.matterRef || '',
+    matterTitle: row.matterTitle || '',
+    paidDate: undefined,
+    status: row.status,
+    tax: row.tax,
+    template: undefined,
+    totalAmount: row.totalAmount,
+  }));
 };
 
 export const fetchDocuments = async (filters: {
@@ -960,8 +1153,7 @@ export const fetchThreads = async (filters: {
     unreadSelectParams.push(filters.viewerUserId, filters.viewerUserId);
   }
 
-  const rows = await queryRows<ThreadRow>(
-    `SELECT
+  const selectColumns = `SELECT
        ct.public_id AS id,
        ca.public_id AS clientId,
        ca.display_name AS clientName,
@@ -972,13 +1164,16 @@ export const fetchThreads = async (filters: {
        m.current_stage_code AS stage,
        pur.urgency_code AS urgency,
        lm.body_text AS lastMessage,
-       lm.sent_at AS lastMessageAt,
+       COALESCE(lm.sent_at, ct.last_message_at, ct.updated_at) AS lastMessageAt,
        owner.display_name AS assignedTo,
        ct.status_code AS status,
-       ${unreadCountSelect}
-     FROM conversation_threads ct
+       ${unreadCountSelect}`;
+
+  const baseJoins = `
      JOIN client_accounts ca ON ca.id = ct.client_account_id
-     LEFT JOIN matters m ON m.id = ct.matter_id
+     LEFT JOIN matters m ON m.id = ct.matter_id`;
+
+  const detailJoins = `
      LEFT JOIN pricing_urgency_rules pur ON pur.id = m.urgency_rule_id
      LEFT JOIN users owner ON owner.id = ct.assigned_owner_user_id
      LEFT JOIN messages lm ON lm.id = (
@@ -987,14 +1182,34 @@ export const fetchThreads = async (filters: {
        WHERE m2.thread_id = ct.id AND m2.deleted_at IS NULL
        ORDER BY m2.sent_at DESC, m2.id DESC
        LIMIT 1
-     )
-     WHERE ${where.join(' AND ')}
-     ORDER BY COALESCE(lm.sent_at, ct.updated_at) DESC
-     ${filters.limit ? 'LIMIT ? OFFSET ?' : ''}`,
-    filters.limit
-      ? [...unreadSelectParams, ...params, filters.limit, filters.offset ?? 0]
-      : [...unreadSelectParams, ...params]
-  );
+     )`;
+
+  const rows = filters.limit
+    ? await queryRows<ThreadRow>(
+        `${selectColumns}
+         FROM (
+           SELECT ct.id
+           FROM conversation_threads ct
+           ${baseJoins}
+           WHERE ${where.join(' AND ')}
+           ORDER BY COALESCE(ct.last_message_at, ct.updated_at) DESC
+           LIMIT ? OFFSET ?
+         ) page
+         JOIN conversation_threads ct ON ct.id = page.id
+         ${baseJoins}
+         ${detailJoins}
+         ORDER BY COALESCE(ct.last_message_at, ct.updated_at) DESC`,
+        [...unreadSelectParams, ...params, filters.limit, filters.offset ?? 0]
+      )
+    : await queryRows<ThreadRow>(
+        `${selectColumns}
+         FROM conversation_threads ct
+         ${baseJoins}
+         ${detailJoins}
+         WHERE ${where.join(' AND ')}
+         ORDER BY COALESCE(ct.last_message_at, ct.updated_at) DESC`,
+        [...unreadSelectParams, ...params]
+      );
 
   return rows.map((row) => ({
     assignedTo: row.assignedTo || 'Unassigned',
@@ -1322,6 +1537,62 @@ export const fetchClientsForList = async (options: { limit: number; offset: numb
     phone: row.phone,
     region: row.region || '',
     totalDue: row.totalDue,
+  }));
+};
+
+export const fetchClientOptions = async (options: { limit: number; offset: number; search?: string }) => {
+  const params: unknown[] = [];
+  const searchClause = options.search
+    ? `AND (ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
+    : '';
+
+  if (options.search) {
+    const searchValue = `%${options.search}%`;
+    params.push(searchValue, searchValue, searchValue);
+  }
+
+  const rows = await queryRows<ClientOptionRow>(
+    `SELECT
+       ca.public_id AS id,
+       ca.display_name AS name,
+       ca.primary_email AS email,
+       ca.primary_phone AS phone,
+       ca.onboarding_status_code AS lifecycleSource,
+       ca.account_status_code AS accountStatusCode,
+       ca.created_at AS joinedAt,
+       COALESCE(contact.last_login_at, ca.updated_at) AS lastActiveAt,
+       owner.display_name AS owner,
+       addr.city AS region
+     FROM client_accounts ca
+     LEFT JOIN users owner ON owner.id = ca.owner_user_id
+     LEFT JOIN client_account_contacts cac
+       ON cac.client_account_id = ca.id
+      AND cac.is_primary = 1
+      AND cac.archived_at IS NULL
+     LEFT JOIN users contact ON contact.id = cac.user_id
+     LEFT JOIN client_addresses addr
+       ON addr.client_account_id = ca.id
+      AND addr.is_primary = 1
+      AND addr.archived_at IS NULL
+     WHERE ca.archived_at IS NULL
+       ${searchClause}
+     ORDER BY ca.updated_at DESC
+     LIMIT ? OFFSET ?`,
+    [...params, options.limit, options.offset]
+  );
+
+  return rows.map((row) => ({
+    accountStatus: row.accountStatusCode,
+    avatar: '',
+    email: row.email,
+    id: row.id,
+    joinedAt: toUiDate(row.joinedAt),
+    lastActiveAt: row.lastActiveAt ? toUiDate(row.lastActiveAt) : toUiDate(row.joinedAt),
+    lifecycle: mapLifecycle(row.accountStatusCode, row.lifecycleSource),
+    name: row.name,
+    owner: row.owner || 'Unassigned',
+    phone: row.phone,
+    region: row.region || '',
   }));
 };
 

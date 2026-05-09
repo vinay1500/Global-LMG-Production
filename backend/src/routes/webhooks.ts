@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { env } from '../config/env.js';
 import { asyncHandler, badRequest } from '../lib/httpErrors.js';
+import { assertWebhookRequestAllowed } from '../lib/webhookSecurity.js';
 import { handleRazorpayWebhook } from '../modules/payments/razorpayService.js';
 
 export const webhooksRouter = Router();
@@ -7,6 +9,12 @@ export const webhooksRouter = Router();
 webhooksRouter.post(
   '/webhooks/razorpay',
   asyncHandler(async (request, response) => {
+    await assertWebhookRequestAllowed(
+      request,
+      'razorpay',
+      env.RAZORPAY_WEBHOOK_IP_ALLOWLIST
+    );
+
     const rawBody = request.rawBody;
 
     if (!rawBody || rawBody.length === 0) {

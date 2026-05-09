@@ -11,6 +11,14 @@ if (!rawEnv.MYSQL_SSL_CA && rawEnv.MYSQL_SSL_CA_PATH) {
   rawEnv.MYSQL_SSL_CA = rawEnv.MYSQL_SSL_CA_PATH;
 }
 
+if (!rawEnv.MYSQL_CONNECT_TIMEOUT_MS && rawEnv.MYSQL_CONNECTION_TIMEOUT_MS) {
+  rawEnv.MYSQL_CONNECT_TIMEOUT_MS = rawEnv.MYSQL_CONNECTION_TIMEOUT_MS;
+}
+
+if (!rawEnv.API_JSON_BODY_LIMIT && rawEnv.JSON_BODY_LIMIT) {
+  rawEnv.API_JSON_BODY_LIMIT = rawEnv.JSON_BODY_LIMIT;
+}
+
 if (rawEnv.OBJECT_STORAGE_DRIVER) {
   rawEnv.DOCUMENT_STORAGE_DRIVER = rawEnv.OBJECT_STORAGE_DRIVER;
 }
@@ -43,6 +51,14 @@ const booleanFromEnv = z.preprocess((value) => {
 
   return value;
 }, z.boolean());
+
+const bodySizeLimit = z.preprocess((value) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return value.trim().toLowerCase();
+}, z.string().regex(/^\d+(?:\.\d+)?(?:b|kb|mb)$/));
 
 const smsProviderMode = z.preprocess((value) => {
   if (typeof value !== 'string') {
@@ -140,6 +156,8 @@ const envSchema = z.object({
   SENTRY_RELEASE: optionalString,
   SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0.05),
   PORT: z.coerce.number().int().positive().default(3001),
+  API_JSON_BODY_LIMIT: bodySizeLimit.default('1mb'),
+  PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   PUBLIC_WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   AUTH_STORE_MODE: z.enum(['mysql']).default('mysql'),
   DASHBOARD_STORE_MODE: z.enum(['mysql']).default('mysql'),
@@ -150,6 +168,7 @@ const envSchema = z.object({
   AUTH_SESSION_SECRET: z.string().min(32).default('change-this-development-session-secret-now'),
   SESSION_TTL_HOURS: z.coerce.number().int().positive().default(12),
   REMEMBER_ME_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().positive().default(10),
   EMAIL_VERIFICATION_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   PHONE_OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().default(15),
@@ -184,6 +203,9 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: optionalString,
   RAZORPAY_KEY_SECRET: optionalString,
   RAZORPAY_WEBHOOK_SECRET: optionalString,
+  RAZORPAY_WEBHOOK_IP_ALLOWLIST: optionalString,
+  RAZORPAY_ALLOWED_CURRENCIES: z.string().min(1).default('USD'),
+  REQUEST_PAYMENT_DRAFT_EXPIRY_MINUTES: z.coerce.number().int().positive().default(30),
   PREVIEW_ACCOUNT_ENABLED: booleanFromEnv.default(false),
   PREVIEW_ACCOUNT_ID: z.string().min(1).default('user-1'),
   PREVIEW_ACCOUNT_NAME: z.string().min(1).default('Arjun Mehta'),
@@ -195,7 +217,10 @@ const envSchema = z.object({
   PREVIEW_GOOGLE_NAME: z.string().min(2).default('Google Preview Client'),
   PREVIEW_GOOGLE_COUNTRY: z.string().min(2).default('IN'),
   MYSQL_HOST: optionalString,
-  MYSQL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  MYSQL_CONNECTION_LIMIT: z.coerce.number().int().positive().max(200).default(10),
+  MYSQL_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  MYSQL_QUEUE_LIMIT: z.coerce.number().int().nonnegative().max(10000).default(100),
+  MYSQL_WAIT_FOR_CONNECTIONS: booleanFromEnv.default(true),
   MYSQL_PORT: z.coerce.number().int().positive().default(3306),
   MYSQL_DATABASE: optionalString,
   MYSQL_PASSWORD: optionalString,
@@ -216,6 +241,7 @@ const envSchema = z.object({
   FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN: booleanFromEnv.default(false),
   FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN: booleanFromEnv.default(true),
   FILE_SCAN_MODE: fileScanMode.default('disabled'),
+  FILE_SCAN_PENDING_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(5),
   CLAMAV_HOST: optionalString,
   CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),

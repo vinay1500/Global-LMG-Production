@@ -285,7 +285,12 @@ export const PackageBuilder: React.FC<PackageBuilderProps> = ({
               </div>
               
               <div className="mt-6 flex flex-wrap gap-2 border-t border-gray-100 pt-4">
-                <button disabled className="flex-1 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed">
+                <button
+                  className="flex-1 py-2.5 rounded-lg text-sm font-medium border border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed"
+                  disabled
+                  title="Client preview is unavailable for this package."
+                  type="button"
+                >
                   Client Preview
                 </button>
                 {packages.length > 1 && (

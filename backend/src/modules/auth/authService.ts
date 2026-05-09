@@ -16,6 +16,8 @@ import { emailAuthProvider } from './providers/email.js';
 import { googleAuthProvider } from './providers/google.js';
 import { smsAuthProvider } from './providers/sms.js';
 import { MysqlAuthStore } from './mysqlAuthStore.js';
+import { consumeGoogleOAuthNonce, issueGoogleOAuthNonce } from './oauthNonceStore.js';
+import { assertStrongClientPassword } from './passwordPolicy.js';
 import {
   clearPersistentRateLimit,
   consumePersistentRateLimit,
@@ -30,6 +32,7 @@ import type {
   ChallengeType,
   PendingChallenge,
 } from './types.js';
+import type { GoogleIdentity } from './providers/types.js';
 
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const normalizePhone = (value: string) => value.replace(/\s+/g, ' ').trim();
@@ -42,11 +45,53 @@ const getWindowMs = () => env.AUTH_RATE_LIMIT_WINDOW_MINUTES * 60_000;
 const PASSWORD_RESET_RESPONSE_FLOOR_MS = 700;
 const PASSWORD_RESET_GENERIC_MESSAGE =
   'If an account exists for that identifier, password reset instructions will be sent.';
+const CODE_ATTEMPT_LIMIT_MESSAGE = 'Too many invalid verification attempts. Request a new code.';
 const isPreviewAccountEnabled = () => env.APP_ENV === 'development' && env.PREVIEW_ACCOUNT_ENABLED;
 const isPreviewAccount = (account: AuthAccountRecord) =>
   normalizeEmail(account.email) === normalizeEmail(env.PREVIEW_ACCOUNT_EMAIL);
 const canAuthenticateAccount = (account: AuthAccountRecord) =>
   !isPreviewAccount(account) || isPreviewAccountEnabled();
+
+export const mergeGoogleIdentityWithAccount = (
+  existingAccount: AuthAccountRecord | undefined,
+  googleIdentity: GoogleIdentity,
+  fallbackCountry = env.DEFAULT_PRICING_COUNTRY
+) => {
+  const normalizedGoogleEmail = normalizeEmail(googleIdentity.email);
+
+  if (!existingAccount) {
+    return {
+      id: createPublicId(),
+      fullName: googleIdentity.fullName,
+      email: normalizedGoogleEmail,
+      phone: '',
+      country: fallbackCountry,
+      oauthSubject: googleIdentity.subject,
+      passwordHash: '',
+      provider: 'google',
+      isEmailVerified: googleIdentity.emailVerified,
+      isPhoneVerified: false,
+      createdAt: nowIso(),
+    } satisfies AuthAccountRecord;
+  }
+
+  if (normalizeEmail(existingAccount.email) !== normalizedGoogleEmail) {
+    throw conflict(
+      'google_email_mismatch',
+      'This Google account is linked to a different email. Verify the email change before using it to sign in.'
+    );
+  }
+
+  return {
+    ...existingAccount,
+    country: existingAccount.country || fallbackCountry,
+    email: existingAccount.email,
+    fullName: existingAccount.fullName || googleIdentity.fullName,
+    isEmailVerified: existingAccount.isEmailVerified || googleIdentity.emailVerified,
+    oauthSubject: googleIdentity.subject,
+    provider: 'google',
+  } satisfies AuthAccountRecord;
+};
 
 const isMysqlConfigured = Boolean(
   env.MYSQL_HOST && env.MYSQL_DATABASE && env.MYSQL_USER && env.MYSQL_PASSWORD
@@ -372,11 +417,39 @@ const readFlow = async (store: AuthStore, rawFlowToken: string | undefined) => {
   return { account, flow };
 };
 
-const verifyChallengeCode = (
+export const getClientAuthCodeMaxAttempts = () => env.AUTH_RATE_LIMIT_MAX_ATTEMPTS;
+
+export const assertChallengeAttemptsAvailable = (
   challenge: PendingChallenge | undefined,
-  code: string,
-  invalidCode: { code: string; message: string }
+  errorCode = 'too_many_verification_attempts'
 ) => {
+  if ((challenge?.attemptCount ?? 0) >= getClientAuthCodeMaxAttempts()) {
+    throw tooManyRequests(errorCode, CODE_ATTEMPT_LIMIT_MESSAGE, env.AUTH_FLOW_TTL_MINUTES * 60);
+  }
+};
+
+const recordFailedFlowChallengeAttempt = async (
+  store: AuthStore,
+  flow: AuthFlowRecord,
+  challengeType: ChallengeType,
+  errorCode = 'too_many_verification_attempts'
+) => {
+  const attemptCount = await store.incrementFlowChallengeAttempt(flow.hashedToken, challengeType);
+
+  if (attemptCount >= getClientAuthCodeMaxAttempts()) {
+    throw tooManyRequests(errorCode, CODE_ATTEMPT_LIMIT_MESSAGE, env.AUTH_FLOW_TTL_MINUTES * 60);
+  }
+};
+
+export const verifyChallengeCodeWithAttemptTracking = async (input: {
+  challenge: PendingChallenge | undefined;
+  code: string;
+  flow: AuthFlowRecord;
+  invalidCode: { code: string; message: string };
+  store: AuthStore;
+}) => {
+  const { challenge, code, flow, invalidCode, store } = input;
+
   if (!challenge) {
     throw unauthorized('missing_verification_step', 'Required verification step is not pending.');
   }
@@ -384,6 +457,8 @@ const verifyChallengeCode = (
   if (new Date(challenge.expiresAt).getTime() <= Date.now()) {
     throw unauthorized('expired_verification_step', 'Verification code expired. Request a new code.');
   }
+
+  assertChallengeAttemptsAvailable(challenge);
 
   if (!challenge.hashedCode) {
     throw unauthorized(
@@ -393,15 +468,18 @@ const verifyChallengeCode = (
   }
 
   if (hashOneTimeCode(code.trim(), env.AUTH_SESSION_SECRET) !== challenge.hashedCode) {
+    await recordFailedFlowChallengeAttempt(store, flow, challenge.type);
     throw unauthorized(invalidCode.code, invalidCode.message);
   }
 };
 
 const verifyPhoneChallenge = async (
-  challenge: PendingChallenge | undefined,
+  store: AuthStore,
+  flow: AuthFlowRecord,
   accountPhone: string,
   code: string
 ) => {
+  const challenge = flow.phoneChallenge;
   if (!challenge) {
     throw unauthorized('missing_verification_step', 'Required verification step is not pending.');
   }
@@ -409,6 +487,8 @@ const verifyPhoneChallenge = async (
   if (new Date(challenge.expiresAt).getTime() <= Date.now()) {
     throw unauthorized('expired_verification_step', 'Verification code expired. Request a new code.');
   }
+
+  assertChallengeAttemptsAvailable(challenge);
 
   if (challenge.providerCode === 'twilio-verify') {
     const verification = await smsAuthProvider.verifyCode({
@@ -419,15 +499,22 @@ const verifyPhoneChallenge = async (
     });
 
     if (!verification.approved) {
+      await recordFailedFlowChallengeAttempt(store, flow, 'phone');
       throw unauthorized('invalid_phone_otp', 'The OTP you entered is invalid.');
     }
 
     return;
   }
 
-  verifyChallengeCode(challenge, code, {
+  await verifyChallengeCodeWithAttemptTracking({
+    challenge,
+    code,
+    flow,
+    invalidCode: {
     code: 'invalid_phone_otp',
     message: 'The OTP you entered is invalid.',
+    },
+    store,
   });
 };
 
@@ -670,6 +757,11 @@ export const authService = {
       throw conflict('phone_already_exists', 'An account with this phone number already exists.');
     }
 
+    assertStrongClientPassword(payload.password, {
+      email: normalizedEmail,
+      fullName: payload.fullName,
+    });
+
     const account: AuthAccountRecord = {
       id: createPublicId(),
       fullName: payload.fullName.trim(),
@@ -719,36 +811,31 @@ export const authService = {
     };
   },
 
-  async signInWithGoogle(payload: { credential?: string; rememberMe: boolean }) {
-    const store = await ensureInitialized();
-    const googleIdentity = await googleAuthProvider.resolveIdentity(payload.credential);
-    const normalizedEmail = normalizeEmail(googleIdentity.email);
-    const existingAccount = await store.getAccountByEmail(normalizedEmail);
+  async issueGoogleSignInNonce() {
+    return issueGoogleOAuthNonce();
+  },
 
-    const account: AuthAccountRecord =
-      existingAccount
-        ? {
-            ...existingAccount,
-            country: existingAccount.country || env.PREVIEW_GOOGLE_COUNTRY,
-            email: normalizedEmail,
-            fullName: existingAccount.fullName || googleIdentity.fullName,
-            isEmailVerified: existingAccount.isEmailVerified || googleIdentity.emailVerified,
-            oauthSubject: googleIdentity.subject,
-            provider: 'google',
-          }
-        : {
-            id: createPublicId(),
-            fullName: googleIdentity.fullName,
-            email: normalizedEmail,
-            phone: '',
-            country: env.PREVIEW_GOOGLE_COUNTRY,
-            oauthSubject: googleIdentity.subject,
-            passwordHash: '',
-            provider: 'google',
-            isEmailVerified: googleIdentity.emailVerified,
-            isPhoneVerified: false,
-            createdAt: nowIso(),
-          };
+  async signInWithGoogle(payload: { credential?: string; nonce?: string; rememberMe: boolean }) {
+    const store = await ensureInitialized();
+    await consumeGoogleOAuthNonce(payload.nonce);
+    const googleIdentity = await googleAuthProvider.resolveIdentity(payload.credential, {
+      nonce: payload.nonce,
+    });
+    const normalizedEmail = normalizeEmail(googleIdentity.email);
+    const existingBySubject = await store.getAccountByOAuthSubject('google', googleIdentity.subject);
+    const existingByEmail = await store.getAccountByEmail(normalizedEmail);
+
+    if (existingBySubject && existingByEmail && existingBySubject.id !== existingByEmail.id) {
+      throw conflict(
+        'google_identity_conflict',
+        'This Google account is already linked to another portal account.'
+      );
+    }
+
+    const account = mergeGoogleIdentityWithAccount(
+      existingBySubject || existingByEmail,
+      googleIdentity
+    );
 
     await store.saveAccount(account);
 
@@ -802,9 +889,15 @@ export const authService = {
     const store = await ensureInitialized();
     const { account, flow } = await readFlow(store, rawFlowToken);
 
-    verifyChallengeCode(flow.emailChallenge, code, {
-      code: 'invalid_email_verification_code',
-      message: 'The verification code is invalid.',
+    await verifyChallengeCodeWithAttemptTracking({
+      challenge: flow.emailChallenge,
+      code,
+      flow,
+      invalidCode: {
+        code: 'invalid_email_verification_code',
+        message: 'The verification code is invalid.',
+      },
+      store,
     });
 
     const updatedAccount = {
@@ -925,7 +1018,7 @@ export const authService = {
     const store = await ensureInitialized();
     const { account, flow } = await readFlow(store, rawFlowToken);
 
-    await verifyPhoneChallenge(flow.phoneChallenge, account.phone, code);
+    await verifyPhoneChallenge(store, flow, account.phone, code);
 
     const updatedAccount = {
       ...account,
@@ -1011,12 +1104,29 @@ export const authService = {
     }
 
     if (normalizeEmail(payload.email) !== normalizeEmail(account.email)) {
+      await recordFailedFlowChallengeAttempt(
+        store,
+        flow,
+        'password-reset',
+        'too_many_reset_attempts'
+      );
       throw unauthorized('invalid_reset_code', 'The reset code is invalid or expired.');
     }
 
-    verifyChallengeCode(flow.passwordResetChallenge, payload.code, {
-      code: 'invalid_reset_code',
-      message: 'The reset code is invalid or expired.',
+    await verifyChallengeCodeWithAttemptTracking({
+      challenge: flow.passwordResetChallenge,
+      code: payload.code,
+      flow,
+      invalidCode: {
+        code: 'invalid_reset_code',
+        message: 'The reset code is invalid or expired.',
+      },
+      store,
+    });
+
+    assertStrongClientPassword(payload.password, {
+      email: account.email,
+      fullName: account.fullName,
     });
 
     await store.saveAccount({

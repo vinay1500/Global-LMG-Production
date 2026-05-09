@@ -12,6 +12,7 @@ import { createAuditEvent, createClientNotifications, resolveDocumentByPublicId 
 import { createPublicId } from '../../lib/authCrypto.js';
 import { allocateBusinessNumber } from '../../lib/businessSequences.js';
 import { badRequest, forbidden, notFound } from '../../lib/httpErrors.js';
+import { logEvent } from '../../lib/observability.js';
 import {
   assertSupportedDocumentUpload,
   computeSha256,
@@ -19,7 +20,13 @@ import {
   getFileExtension,
   isSafePreviewMimeType,
 } from './storage.js';
-import { isScanBlocked, scanDocumentContent, type DocumentScanResult } from './malwareScanner.js';
+import {
+  getInitialDocumentScanResult,
+  isScanBlocked,
+  scanDocumentContent,
+  shouldRunBackgroundScan,
+  type DocumentScanResult,
+} from './malwareScanner.js';
 
 type DocumentMetaRow = RowDataPacket & {
   clientAccountId: number;
@@ -236,6 +243,24 @@ const scanActionCode = (status: string) => {
   return 'document.scan_requested';
 };
 
+const truncate = (value: string, maxLength = 500) =>
+  value.length > maxLength ? value.slice(0, maxLength - 1) : value;
+
+const serializeError = (error: unknown) =>
+  error instanceof Error
+    ? {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+      }
+    : error;
+
+const toScanFailureResult = (error: unknown): DocumentScanResult => ({
+  errorText: error instanceof Error ? truncate(error.message) : 'Scanner request failed.',
+  providerCode: 'clamav',
+  status: 'scan_failed',
+});
+
 const auditScanResult = async (
   actor: AdminActor,
   documentDbId: number,
@@ -263,6 +288,104 @@ const auditScanResult = async (
     },
     executor
   );
+};
+
+const updateDocumentVersionScanResult = async (input: {
+  actorRoleCode: string;
+  actorUserId: number;
+  documentDbId: number;
+  documentVersionDbId: number;
+  result: DocumentScanResult;
+}) => {
+  await withTransaction(async (connection) => {
+    await executeStatement(
+      `UPDATE document_versions
+       SET virus_scan_status_code = ?,
+           scan_provider_code = ?,
+           scan_checked_at = UTC_TIMESTAMP(6),
+           scan_error_text = ?,
+           quarantine_flag = ?
+       WHERE id = ?
+         AND virus_scan_status_code = 'pending_scan'`,
+      [
+        input.result.status,
+        input.result.providerCode,
+        input.result.errorText,
+        input.result.status === 'infected' ? 1 : 0,
+        input.documentVersionDbId,
+      ],
+      connection
+    );
+
+    await auditScanResult(
+      {
+        displayName: 'System',
+        email: 'system@globallmg.local',
+        id: 'system',
+        mustRotatePassword: false,
+        permissionCodes: [],
+        roleCodes: [input.actorRoleCode],
+        userId: input.actorUserId,
+      },
+      input.documentDbId,
+      input.result,
+      connection
+    );
+  });
+};
+
+const runAdminDocumentBackgroundScan = async (input: {
+  actorRoleCode: string;
+  actorUserId: number;
+  documentDbId: number;
+  documentVersionDbId: number;
+  storagePath: string;
+}) => {
+  let scanResult: DocumentScanResult;
+
+  try {
+    const content = await storageDriver.readBuffer(input.storagePath);
+    scanResult = await scanDocumentContent(content);
+  } catch (error) {
+    scanResult = toScanFailureResult(error);
+    logEvent('error', 'document.background_scan_failed', {
+      documentId: input.documentDbId,
+      documentVersionId: input.documentVersionDbId,
+      error: serializeError(error),
+    });
+  }
+
+  try {
+    await updateDocumentVersionScanResult({
+      actorRoleCode: input.actorRoleCode,
+      actorUserId: input.actorUserId,
+      documentDbId: input.documentDbId,
+      documentVersionDbId: input.documentVersionDbId,
+      result: scanResult,
+    });
+  } catch (error) {
+    logEvent('error', 'document.background_scan_update_failed', {
+      documentId: input.documentDbId,
+      documentVersionId: input.documentVersionDbId,
+      error: serializeError(error),
+    });
+  }
+};
+
+const scheduleAdminDocumentBackgroundScan = (input: {
+  actorRoleCode: string;
+  actorUserId: number;
+  documentDbId: number;
+  documentVersionDbId: number;
+  storagePath: string;
+}) => {
+  void runAdminDocumentBackgroundScan(input).catch((error) => {
+    logEvent('error', 'document.background_scan_unhandled_error', {
+      documentId: input.documentDbId,
+      documentVersionId: input.documentVersionDbId,
+      error: serializeError(error),
+    });
+  });
 };
 
 const getMatterUploadMeta = async (matterPublicId: string, executor?: Parameters<typeof queryRows>[2]) => {
@@ -314,8 +437,8 @@ export const uploadAdminDocument = async (
     reviewState: 'reviewed' | 'unreviewed';
     visibility: 'client' | 'internal';
   }
-) =>
-  withTransaction(async (connection) => {
+) => {
+  const result = await withTransaction(async (connection) => {
     await storageDriver.ensureReady();
     const matter = await getMatterUploadMeta(payload.matterId, connection);
     const checksumSha256 = computeSha256(payload.content);
@@ -342,7 +465,7 @@ export const uploadAdminDocument = async (
       payload.fileName
     );
     await storageDriver.writeBuffer(storageKey, payload.content);
-    const scanResult = await scanDocumentContent(payload.content);
+    const initialScanResult = getInitialDocumentScanResult();
 
     const nowExpression = 'UTC_TIMESTAMP(6)';
     const documentInsert = await executeStatement(
@@ -370,7 +493,7 @@ export const uploadAdminDocument = async (
       connection
     );
 
-    await executeStatement(
+    const versionInsert = await executeStatement(
       `INSERT INTO document_versions (
          public_id,
          document_id,
@@ -391,7 +514,7 @@ export const uploadAdminDocument = async (
          uploaded_at,
          is_current,
          retention_hold_flag
-       ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowExpression}, ?, ?, ?, ${nowExpression}, 1, 0)`,
+       ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowExpression}, 1, 0)`,
       [
         createPublicId(),
         documentInsert.insertId,
@@ -402,14 +525,16 @@ export const uploadAdminDocument = async (
         getFileExtension(payload.fileName),
         payload.content.length,
         checksumSha256,
-        scanResult.status,
-        scanResult.providerCode,
-        scanResult.errorText,
-        scanResult.status === 'infected' ? 1 : 0,
+        initialScanResult.status,
+        initialScanResult.providerCode,
+        initialScanResult.status === 'pending_scan' ? null : new Date(),
+        initialScanResult.errorText,
+        initialScanResult.status === 'infected' ? 1 : 0,
         actor.userId,
       ],
       connection
     );
+    const documentVersionId = Number(versionInsert.insertId);
 
     await executeStatement(
       `INSERT INTO matter_documents (
@@ -432,7 +557,7 @@ export const uploadAdminDocument = async (
         changes: [
           { fieldName: 'matter_id', newValue: matter.matterPublicId },
           { fieldName: 'visibility_scope_code', newValue: toVisibilityScope(payload.visibility) },
-          { fieldName: 'virus_scan_status_code', newValue: scanResult.status },
+          { fieldName: 'virus_scan_status_code', newValue: initialScanResult.status },
         ],
         entityPk: documentInsert.insertId,
         entityTableName: 'documents',
@@ -456,7 +581,9 @@ export const uploadAdminDocument = async (
       connection
     );
 
-    await auditScanResult(actor, documentInsert.insertId, scanResult, connection);
+    if (!shouldRunBackgroundScan(initialScanResult)) {
+      await auditScanResult(actor, documentInsert.insertId, initialScanResult, connection);
+    }
 
     if (payload.visibility === 'client') {
       await createClientNotifications(
@@ -474,10 +601,29 @@ export const uploadAdminDocument = async (
     }
 
     return {
+      backgroundScan: shouldRunBackgroundScan(initialScanResult)
+        ? {
+            actorRoleCode: actor.roleCodes[0] || 'case_manager',
+            actorUserId: actor.userId,
+            documentDbId: documentInsert.insertId,
+            documentVersionDbId: documentVersionId,
+            storagePath: storageKey,
+          }
+        : null,
       documentId: documentPublicId,
       status: 'uploaded' as const,
     };
   });
+
+  if (result.backgroundScan) {
+    scheduleAdminDocumentBackgroundScan(result.backgroundScan);
+  }
+
+  return {
+    documentId: result.documentId,
+    status: result.status,
+  };
+};
 
 export const uploadAdminDocumentVersion = async (
   actor: AdminActor,
@@ -489,8 +635,8 @@ export const uploadAdminDocumentVersion = async (
     mimeType: string;
     reviewState: 'reviewed' | 'unreviewed';
   }
-) =>
-  withTransaction(async (connection) => {
+) => {
+  const result = await withTransaction(async (connection) => {
     await storageDriver.ensureReady();
     const document = await resolveDocumentByPublicId(documentId, connection);
     const detailRows = await queryRows<DocumentDetailRow>(
@@ -548,7 +694,7 @@ export const uploadAdminDocumentVersion = async (
       payload.fileName
     );
     await storageDriver.writeBuffer(storageKey, payload.content);
-    const scanResult = await scanDocumentContent(payload.content);
+    const initialScanResult = getInitialDocumentScanResult();
 
     await executeStatement(
       `UPDATE document_versions
@@ -558,7 +704,7 @@ export const uploadAdminDocumentVersion = async (
       connection
     );
 
-    await executeStatement(
+    const versionInsert = await executeStatement(
       `INSERT INTO document_versions (
          public_id,
          document_id,
@@ -579,7 +725,7 @@ export const uploadAdminDocumentVersion = async (
          uploaded_at,
          is_current,
          retention_hold_flag
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), ?, ?, ?, UTC_TIMESTAMP(6), 1, 0)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), 1, 0)`,
       [
         versionPublicId,
         document.id,
@@ -591,10 +737,11 @@ export const uploadAdminDocumentVersion = async (
         getFileExtension(payload.fileName),
         payload.content.length,
         checksumSha256,
-        scanResult.status,
-        scanResult.providerCode,
-        scanResult.errorText,
-        scanResult.status === 'infected' ? 1 : 0,
+        initialScanResult.status,
+        initialScanResult.providerCode,
+        initialScanResult.status === 'pending_scan' ? null : new Date(),
+        initialScanResult.errorText,
+        initialScanResult.status === 'infected' ? 1 : 0,
         actor.userId,
       ],
       connection
@@ -619,7 +766,7 @@ export const uploadAdminDocumentVersion = async (
         actorUserId: actor.userId,
         changes: [
           { fieldName: 'version_no', newValue: nextVersion },
-          { fieldName: 'virus_scan_status_code', newValue: scanResult.status },
+          { fieldName: 'virus_scan_status_code', newValue: initialScanResult.status },
         ],
         entityPk: document.id,
         entityTableName: 'documents',
@@ -643,7 +790,9 @@ export const uploadAdminDocumentVersion = async (
       connection
     );
 
-    await auditScanResult(actor, document.id, scanResult, connection);
+    if (!shouldRunBackgroundScan(initialScanResult)) {
+      await auditScanResult(actor, document.id, initialScanResult, connection);
+    }
 
     if (visibilityToUi(detail.visibilityScope) === 'client') {
       await createClientNotifications(
@@ -661,12 +810,33 @@ export const uploadAdminDocumentVersion = async (
     }
 
     return {
+      backgroundScan: shouldRunBackgroundScan(initialScanResult)
+        ? {
+            actorRoleCode: actor.roleCodes[0] || 'case_manager',
+            actorUserId: actor.userId,
+            documentDbId: document.id,
+            documentVersionDbId: Number(versionInsert.insertId),
+            storagePath: storageKey,
+          }
+        : null,
       documentId,
       status: 'version_uploaded' as const,
       versionId: versionPublicId,
       versionNo: nextVersion,
     };
   });
+
+  if (result.backgroundScan) {
+    scheduleAdminDocumentBackgroundScan(result.backgroundScan);
+  }
+
+  return {
+    documentId: result.documentId,
+    status: result.status,
+    versionId: result.versionId,
+    versionNo: result.versionNo,
+  };
+};
 
 export const getDocumentDetail = async (documentId: string) => {
   const detailRows = await queryRows<DocumentDetailRow>(

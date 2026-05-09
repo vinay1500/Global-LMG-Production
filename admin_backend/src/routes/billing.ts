@@ -56,11 +56,13 @@ billingRouter.get(
     await requireReadPermission(request, 'invoice.view');
     const invoiceId = z.string().trim().min(2).max(64).parse(request.params.invoiceId);
     const pdf = await renderAdminInvoicePdf(invoiceId);
+    response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader(
       'Content-Disposition',
       `inline; filename="global-lmg-invoice-${invoiceId.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf"`
     );
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(pdf);
   })
 );

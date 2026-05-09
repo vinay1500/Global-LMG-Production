@@ -5,6 +5,8 @@ admin_backend/node_modules
 dist/
 **/dist/
 *.tsbuildinfo
+.eslintcache
+**/.eslintcache
 .env
 .env.*
 !.env.example

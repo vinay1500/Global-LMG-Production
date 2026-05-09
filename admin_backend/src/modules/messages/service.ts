@@ -2,15 +2,18 @@ import type { AdminActor } from '../auth/service.js';
 import { createPublicId } from '../../lib/authCrypto.js';
 import { allocateBusinessNumber } from '../../lib/businessSequences.js';
 import { badRequest, notFound } from '../../lib/httpErrors.js';
+import { sanitizeMessageContent } from '../../lib/messageContent.js';
 import { executeStatement, queryRows, withTransaction } from '../../lib/mysql.js';
+import { logEvent } from '../../lib/observability.js';
+import { env } from '../../config/env.js';
 import type { RowDataPacket } from 'mysql2/promise';
 import {
   buildPaginationMeta,
   countThreads,
-  fetchClientsForList,
+  fetchClientOptions,
   fetchEvents,
-  fetchInvoices,
-  fetchMatters,
+  fetchInvoiceSummaries,
+  fetchMatterOptions,
   fetchMessagesByThreadIds,
   fetchThreads,
   normalizePagination,
@@ -53,18 +56,27 @@ type ExistingGeneralThreadRow = RowDataPacket & {
 };
 
 export const getWorkspace = async (actor: AdminActor, options: { limit?: number; offset?: number } = {}) => {
+  const startedAt = process.hrtime.bigint();
   const pagination = normalizePagination(options);
   const threads = await fetchThreads({
     limit: pagination.limit,
     offset: pagination.offset,
     viewerUserId: actor.userId,
   });
-  const clientsPromise = fetchClientsForList({ limit: 250, offset: 0 });
-  const allMattersPromise = fetchMatters({ limit: 250 });
-  const totalPromise = countThreads({});
-
   if (threads.length === 0) {
-    const [clients, matters, total] = await Promise.all([clientsPromise, allMattersPromise, totalPromise]);
+    const clients = await fetchClientOptions({ limit: 250, offset: 0 });
+    const matters = await fetchMatterOptions({ limit: 250 });
+    const total = await countThreads({});
+    if (env.APP_ENV !== 'production') {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      logEvent('info', 'admin.messages_workspace.loaded', {
+        durationMs: Number(durationMs.toFixed(2)),
+        limit: pagination.limit,
+        offset: pagination.offset,
+        queryCountEstimate: 4,
+        threadCount: 0,
+      });
+    }
 
     return {
       clients,
@@ -78,17 +90,13 @@ export const getWorkspace = async (actor: AdminActor, options: { limit?: number;
   }
 
   const clientIds = Array.from(new Set(threads.map((thread) => thread.clientId).filter(Boolean)));
-  const matterIds = Array.from(new Set(threads.map((thread) => thread.matterId).filter(Boolean)));
-  const [clients, allMatters, invoices, events, messages, total] = await Promise.all([
-    clientsPromise,
-    allMattersPromise,
-    fetchInvoices({ clientAccountIds: clientIds }),
-    fetchEvents({ clientAccountIds: clientIds }),
-    fetchMessagesByThreadIds(threads.map((thread) => thread.id)),
-    totalPromise,
-  ]);
-
-  return {
+  const clients = await fetchClientOptions({ limit: 250, offset: 0 });
+  const allMatters = await fetchMatterOptions({ limit: 250 });
+  const invoices = await fetchInvoiceSummaries({ clientAccountIds: clientIds, limit: 100 });
+  const events = await fetchEvents({ clientAccountIds: clientIds });
+  const messages = await fetchMessagesByThreadIds(threads.map((thread) => thread.id));
+  const total = await countThreads({});
+  const response = {
     clients,
     events,
     invoices,
@@ -97,6 +105,22 @@ export const getWorkspace = async (actor: AdminActor, options: { limit?: number;
     pagination: buildPaginationMeta(pagination, total),
     threads,
   };
+
+  if (env.APP_ENV !== 'production') {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    logEvent('info', 'admin.messages_workspace.loaded', {
+      clientCount: clients.length,
+      durationMs: Number(durationMs.toFixed(2)),
+      invoiceCount: invoices.length,
+      limit: pagination.limit,
+      messageCount: messages.length,
+      offset: pagination.offset,
+      queryCountEstimate: 7,
+      threadCount: threads.length,
+    });
+  }
+
+  return response;
 };
 
 export const createThread = async (
@@ -108,6 +132,11 @@ export const createThread = async (
     matterId?: string;
   }
 ) => {
+  const messageContent = sanitizeMessageContent(payload.content);
+  if (!messageContent) {
+    throw badRequest('message_content_required', 'Message content is required.');
+  }
+
   return withTransaction(async (connection) => {
     const clientRows = await queryRows<ClientAccountRow>(
       `SELECT id, display_name AS displayName
@@ -288,7 +317,7 @@ export const createThread = async (
          edited_at,
          deleted_at
        ) VALUES (?, ?, ?, NULL, NULL, 'text', ?, 1, NULL, UTC_TIMESTAMP(6), NULL, NULL)`,
-      [messagePublicId, threadId, actor.userId, payload.content],
+      [messagePublicId, threadId, actor.userId, messageContent],
       connection
     );
 
@@ -324,19 +353,19 @@ export const createThread = async (
         changes: [
           { fieldName: 'client_account_id', newValue: payload.clientId },
           { fieldName: 'matter_id', newValue: payload.matterId || null },
-          { fieldName: 'body_text', newValue: payload.content },
+          { fieldName: 'body_text', newValue: messageContent },
         ],
         entityPk: threadId,
         entityTableName: 'conversation_threads',
         sourceModule: 'messages_workspace',
-        summaryNewValue: `${subject}: ${payload.content.slice(0, 160)}`,
+        summaryNewValue: `${subject}: ${messageContent.slice(0, 160)}`,
       },
       connection
     );
 
     await createClientNotifications(
       {
-        bodyText: payload.content.slice(0, 240),
+        bodyText: messageContent.slice(0, 240),
         clientAccountId: client.id,
         matterId: matter?.id || null,
         notificationTypeCode: 'message_received',
@@ -364,6 +393,11 @@ export const replyToThread = async (
     visibleToClient?: boolean;
   }
 ) => {
+  const messageContent = sanitizeMessageContent(payload.content);
+  if (!messageContent) {
+    throw badRequest('message_content_required', 'Message content is required.');
+  }
+
   return withTransaction(async (connection) => {
     const thread = await resolveThreadByPublicId(payload.threadId, connection);
     const stateRows = await queryRows<ThreadStateRow>(
@@ -408,7 +442,7 @@ export const replyToThread = async (
         createPublicId(),
         thread.id,
         actor.userId,
-        payload.content,
+        messageContent,
         payload.visibleToClient === false ? 0 : 1,
       ],
       connection
@@ -444,11 +478,11 @@ export const replyToThread = async (
         actionLabel: 'Admin message sent',
         actorRoleCode: actor.roleCodes[0] || 'messaging_desk',
         actorUserId: actor.userId,
-        changes: [{ fieldName: 'body_text', newValue: payload.content }],
+        changes: [{ fieldName: 'body_text', newValue: messageContent }],
         entityPk: thread.id,
         entityTableName: 'conversation_threads',
         sourceModule: 'messages_workspace',
-        summaryNewValue: payload.content.slice(0, 180),
+        summaryNewValue: messageContent.slice(0, 180),
       },
       connection
     );
@@ -456,7 +490,7 @@ export const replyToThread = async (
     if (payload.visibleToClient !== false) {
       await createClientNotifications(
         {
-          bodyText: payload.content.slice(0, 240),
+          bodyText: messageContent.slice(0, 240),
           clientAccountId: thread.clientAccountId,
           matterId: thread.matterId,
           notificationTypeCode: 'message_received',

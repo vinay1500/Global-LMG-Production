@@ -63,6 +63,7 @@ export const AuthModal = () => {
     setAuthMode,
     signIn,
     signUp,
+    issueGoogleNonce,
     signInWithGoogle,
     verifyEmail,
     submitGooglePhone,
@@ -129,8 +130,12 @@ export const AuthModal = () => {
   });
 
   const passwordStrengthHints = useMemo(
-    () => getPasswordStrengthErrors(signUpForm.password),
-    [signUpForm.password]
+    () =>
+      getPasswordStrengthErrors(signUpForm.password, {
+        email: signUpForm.email,
+        name: signUpForm.fullName,
+      }),
+    [signUpForm.email, signUpForm.fullName, signUpForm.password]
   );
   const signUpAddressValue: AddressFormValue = {
     ...createEmptyAddressValue(signUpForm.country),
@@ -312,34 +317,39 @@ export const AuthModal = () => {
     setGoogleButtonReady(false);
     setGoogleButtonError(null);
 
-    void mountGoogleIdentityButton(mountNode, {
-      width: mountNode.clientWidth,
-      onCredential: async (credential) => {
-        clearFeedback();
-        setIsSubmitting(true);
+    void issueGoogleNonce()
+      .then((nonceResult) =>
+        mountGoogleIdentityButton(mountNode, {
+          nonce: nonceResult.nonce,
+          width: mountNode.clientWidth,
+          onCredential: async (credential) => {
+            clearFeedback();
+            setIsSubmitting(true);
 
-        try {
-          const result = await signInWithGoogle({
-            credential,
-            rememberMe: signInForm.rememberMe,
-          });
-          handleGoogleAuthResult(result);
-        } catch (error) {
-          setAlert({
-            type: 'error',
-            message:
-              error instanceof Error && !('code' in error)
-                ? error.message
-                : mapAuthError(error),
-          });
-        } finally {
-          setIsSubmitting(false);
-        }
-      },
-      onError: (error) => {
-        setAlert({ type: 'error', message: error.message });
-      },
-    })
+            try {
+              const result = await signInWithGoogle({
+                credential,
+                nonce: nonceResult.nonce,
+                rememberMe: signInForm.rememberMe,
+              });
+              handleGoogleAuthResult(result);
+            } catch (error) {
+              setAlert({
+                type: 'error',
+                message:
+                  error instanceof Error && !('code' in error)
+                    ? error.message
+                    : mapAuthError(error),
+              });
+            } finally {
+              setIsSubmitting(false);
+            }
+          },
+          onError: (error) => {
+            setAlert({ type: 'error', message: error.message });
+          },
+        })
+      )
       .then((nextCleanup) => {
         if (disposed) {
           nextCleanup();
@@ -368,7 +378,7 @@ export const AuthModal = () => {
       setGoogleButtonReady(false);
       cleanup?.();
     };
-  }, [googleButtonHost, signInForm.rememberMe, signInWithGoogle, view]);
+  }, [googleButtonHost, issueGoogleNonce, signInForm.rememberMe, signInWithGoogle, view]);
 
   // Shared field styles keep the glassmorphism forms visually consistent across every step.
   const glassFieldClass =
@@ -478,7 +488,10 @@ export const AuthModal = () => {
       nextErrors.postalCode = 'Postal code is required.';
     }
 
-    const passwordErrors = getPasswordStrengthErrors(signUpForm.password);
+    const passwordErrors = getPasswordStrengthErrors(signUpForm.password, {
+      email: signUpForm.email,
+      name: signUpForm.fullName,
+    });
     if (passwordErrors.length > 0) {
       nextErrors.password = passwordErrors[0];
     }
@@ -509,7 +522,9 @@ export const AuthModal = () => {
     if (resetForm.code.trim().length !== 6) {
       nextErrors.resetCode = 'Enter the 6-digit reset code.';
     }
-    const passwordErrors = getPasswordStrengthErrors(resetForm.password);
+    const passwordErrors = getPasswordStrengthErrors(resetForm.password, {
+      email: resetForm.email,
+    });
     if (passwordErrors.length > 0) {
       nextErrors.resetPassword = passwordErrors[0];
     }
@@ -601,6 +616,11 @@ export const AuthModal = () => {
         return 'That verification step expired. Start the flow again.';
       case 'google_sign_in_disabled':
         return 'Google sign-in is not available right now.';
+      case 'google_nonce_required':
+      case 'google_nonce_invalid':
+      case 'google_nonce_missing':
+      case 'google_nonce_mismatch':
+        return 'Google sign-in expired. Please try again.';
       default:
         return authError.message || 'Something went wrong. Please try again.';
       }

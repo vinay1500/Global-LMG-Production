@@ -7,6 +7,7 @@ import {
   KeyRound,
   Loader2,
   Save,
+  ShieldCheck,
   SlidersHorizontal,
   UserCircle,
 } from 'lucide-react';
@@ -21,7 +22,7 @@ import type {
 } from '../../lib/api/contracts';
 import { useAdminSession } from '../../providers/AdminSessionProvider';
 
-type AccountTab = 'password' | 'preferences' | 'profile';
+type AccountTab = 'password' | 'preferences' | 'profile' | 'security';
 
 type ProfileForm = {
   city: string;
@@ -43,6 +44,7 @@ type PreferencesForm = {
 const ACCOUNT_TABS: Array<{ icon: React.ComponentType<{ className?: string }>; id: AccountTab; label: string }> = [
   { icon: UserCircle, id: 'profile', label: 'My Profile' },
   { icon: KeyRound, id: 'password', label: 'Change Password' },
+  { icon: ShieldCheck, id: 'security', label: 'Security' },
   { icon: SlidersHorizontal, id: 'preferences', label: 'Preferences' },
 ];
 
@@ -98,6 +100,11 @@ export const AdminAccountPage = () => {
   const [statusMessage, setStatusMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [mfaSetup, setMfaSetup] = useState<Awaited<ReturnType<typeof authApi.startMfaEnrollment>> | null>(null);
+  const [mfaVerificationCode, setMfaVerificationCode] = useState('');
+  const [mfaDisableCode, setMfaDisableCode] = useState('');
+  const [mfaDisablePassword, setMfaDisablePassword] = useState('');
+  const [mfaRecoveryCodes, setMfaRecoveryCodes] = useState<string[]>([]);
 
   useEffect(() => {
     if (requestedTab && ACCOUNT_TABS.some((tab) => tab.id === requestedTab)) {
@@ -144,6 +151,14 @@ export const AdminAccountPage = () => {
   if (!data || !profileForm || !preferencesForm) {
     return null;
   }
+
+  const mfaRequirementMode = data.security.mfaRequirementMode || 'off';
+  const mfaRolloutLabel =
+    mfaRequirementMode === 'enforce'
+      ? 'Required'
+      : mfaRequirementMode === 'warn'
+        ? 'Enrollment requested'
+        : 'Optional';
 
   const saveProfile = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -222,6 +237,62 @@ export const AdminAccountPage = () => {
       setStatusMessage('Password changed. Other admin sessions for this account were signed out.');
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Unable to change password.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const startMfaSetup = async () => {
+    setFormError('');
+    setStatusMessage('');
+    setMfaRecoveryCodes([]);
+    setIsSaving(true);
+    try {
+      setMfaSetup(await authApi.startMfaEnrollment());
+      setStatusMessage('Scan the QR code, then enter the first code from your authenticator app.');
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to start MFA setup.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const verifyMfaSetup = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+    setStatusMessage('');
+    setIsSaving(true);
+    try {
+      const result = await authApi.verifyMfaEnrollment({ code: mfaVerificationCode.trim() });
+      setMfaRecoveryCodes(result.recoveryCodes);
+      setMfaSetup(null);
+      setMfaVerificationCode('');
+      await refresh();
+      setStatusMessage('Authenticator app verification is enabled. Store your recovery codes securely.');
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to verify MFA setup.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const disableMfa = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setFormError('');
+    setStatusMessage('');
+    setIsSaving(true);
+    try {
+      await authApi.disableMfa({
+        code: mfaDisableCode.trim(),
+        currentPassword: mfaDisablePassword,
+      });
+      setMfaDisableCode('');
+      setMfaDisablePassword('');
+      setMfaRecoveryCodes([]);
+      await refresh();
+      setStatusMessage('Authenticator app verification disabled.');
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Unable to disable MFA.');
     } finally {
       setIsSaving(false);
     }
@@ -376,6 +447,120 @@ export const AdminAccountPage = () => {
           </button>
           <SaveButton isSaving={isSaving} label="Change Password" />
         </form>
+      ) : null}
+
+      {activeTab === 'security' ? (
+        <div className="rounded-2xl border border-[#E6E4DD] bg-white p-6 shadow-sm">
+          <SectionTitle
+            description="Add authenticator app verification for admin sign-in and keep recovery codes somewhere private."
+            icon={ShieldCheck}
+            title="Multi-factor Authentication"
+          />
+
+          {mfaRequirementMode !== 'off' && !data.security.mfaEnabled ? (
+            <div className="mt-6 flex gap-3 rounded-xl border border-[#E0B35C] bg-[#FFF8EA] p-4 text-sm text-[#7A5A1B]">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Authenticator app MFA is part of the admin security rollout.</p>
+                <p className="mt-1 text-xs">
+                  Set up MFA now so this account remains ready when enforcement is enabled.
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mt-6 rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4">
+            <p className="text-sm font-medium text-[#2C2B29]">
+              Status: {data.security.mfaEnabled ? 'Enabled' : 'Not enabled'}
+            </p>
+            <p className="mt-1 text-xs text-[#8C8981]">Platform rollout: {mfaRolloutLabel}</p>
+            {data.security.mfaEnabledAt ? (
+              <p className="mt-1 text-xs text-[#8C8981]">
+                Enabled {new Date(data.security.mfaEnabledAt).toLocaleString()}
+              </p>
+            ) : null}
+          </div>
+
+          {!data.security.mfaEnabled ? (
+            <div className="mt-6 space-y-5">
+              {!mfaSetup ? (
+                <button
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#2C2B29] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4A4946] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSaving}
+                  onClick={() => void startMfaSetup()}
+                  type="button"
+                >
+                  {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                  Set Up Authenticator App
+                </button>
+              ) : (
+                <form className="space-y-5" onSubmit={verifyMfaSetup}>
+                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-[240px,1fr]">
+                    <div className="rounded-xl border border-[#E6E4DD] bg-white p-3">
+                      <img alt="Authenticator app QR code" className="h-auto w-full" src={mfaSetup.qrCodeDataUrl} />
+                    </div>
+                    <div>
+                      <p className="text-sm text-[#5A5751]">
+                        Scan this QR code with your authenticator app. If scanning is unavailable, use this provisioning URI.
+                      </p>
+                      <textarea
+                        className="mt-3 h-28 w-full rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-xs text-[#2C2B29] outline-none"
+                        readOnly
+                        value={mfaSetup.provisioningUri}
+                      />
+                      <div className="mt-4 max-w-xs">
+                        <AccountInput
+                          label="6-digit code"
+                          onChange={setMfaVerificationCode}
+                          value={mfaVerificationCode}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <SaveButton isSaving={isSaving} label="Enable MFA" />
+                </form>
+              )}
+
+              {mfaRecoveryCodes.length ? (
+                <div className="rounded-xl border border-[#B8D8C2] bg-[#F4FBF5] p-4">
+                  <p className="text-sm font-medium text-[#337348]">Recovery codes</p>
+                  <p className="mt-1 text-xs text-[#337348]">
+                    These codes are shown once. Store them securely.
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {mfaRecoveryCodes.map((code) => (
+                      <code className="rounded-md bg-white px-3 py-2 text-sm text-[#2C2B29]" key={code}>
+                        {code}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <form className="mt-6 space-y-5" onSubmit={disableMfa}>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <PasswordInput
+                  label="Current password"
+                  onChange={setMfaDisablePassword}
+                  show={showPasswords}
+                  value={mfaDisablePassword}
+                />
+                <AccountInput
+                  label="6-digit authenticator code"
+                  onChange={setMfaDisableCode}
+                  value={mfaDisableCode}
+                />
+              </div>
+              <SaveButton isSaving={isSaving} label="Disable MFA" />
+              {mfaRequirementMode === 'enforce' ? (
+                <p className="text-xs text-[#8C8981]">
+                  MFA is currently enforced for admin access. Ask an ops administrator before disabling it.
+                </p>
+              ) : null}
+            </form>
+          )}
+        </div>
       ) : null}
 
       {activeTab === 'preferences' ? (

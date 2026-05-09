@@ -31,7 +31,7 @@ export const createApp = () => {
     })
   );
   app.use('/api/v1/webhooks', webhookRouter);
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: env.ADMIN_JSON_BODY_LIMIT }));
   app.use('/api', apiRouter);
   app.use(sentryErrorHandler());
   app.use(errorMiddleware);

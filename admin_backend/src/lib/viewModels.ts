@@ -31,7 +31,7 @@ const toTimeLabel = (value: string | null | undefined) => {
   }
 
   const date = new Date(toIso(value));
-  return date.toLocaleTimeString('en-IN', {
+  return date.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
   });

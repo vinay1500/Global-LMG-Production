@@ -1,4 +1,6 @@
 import { createVerify, generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type GoogleCalendarClientModule =
@@ -172,5 +174,53 @@ describe('Google Calendar service-account JWT helpers', () => {
     expect(googleCalendarClient.isGoogleCalendarImpersonatedEmailAllowed('admin@gmail.com', '')).toBe(
       true,
     );
+  });
+
+  it('builds a client-safe Google Calendar description without internal notes or matter details', async () => {
+    const googleCalendarClient = await loadGoogleCalendarClient();
+    const description = googleCalendarClient.buildClientSafeGoogleCalendarDescription();
+
+    expect(description).toContain('Purpose: Global LMG coordination meeting.');
+    expect(description).toContain('Global LMG portal');
+    expect(description).not.toContain('Matter:');
+    expect(description).not.toContain('Client:');
+    expect(description).not.toContain('internal');
+
+    const source = readFileSync(
+      resolve(process.cwd(), 'admin_backend/src/modules/events/googleCalendarClient.ts'),
+      'utf8',
+    );
+    expect(source).toContain('description: buildClientSafeGoogleCalendarDescription()');
+    expect(source).not.toContain('event.notes ||');
+    expect(source).not.toContain('Matter: ${event.matterTitle}');
+    expect(source).not.toContain('Client: ${event.clientName}');
+  });
+
+  it('uses an explicit configured calendar ID when present', async () => {
+    const googleCalendarClient = await loadGoogleCalendarClient({
+      GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID: 'calendar@example.com',
+      GOOGLE_CALENDAR_ID: 'legacy-calendar@example.com',
+    });
+
+    expect(googleCalendarClient.getGoogleCalendarIdConfig()).toEqual({
+      calendarId: 'calendar@example.com',
+      defaultedToPrimary: false,
+      source: 'GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID',
+    });
+  });
+
+  it('defaults to primary only for Workspace delegation when no calendar ID is configured', async () => {
+    const googleCalendarClient = await loadGoogleCalendarClient(
+      {
+        CALENDAR_ADMIN_AUTH_MODE: 'workspace_delegation',
+      },
+      ['GOOGLE_CALENDAR_DEFAULT_CALENDAR_ID', 'GOOGLE_CALENDAR_ID'],
+    );
+
+    expect(googleCalendarClient.getGoogleCalendarIdConfig()).toEqual({
+      calendarId: 'primary',
+      defaultedToPrimary: true,
+      source: 'workspace_delegation_primary',
+    });
   });
 });

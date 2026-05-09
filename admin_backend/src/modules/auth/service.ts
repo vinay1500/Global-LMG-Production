@@ -5,12 +5,14 @@ import {
   createNumericCode,
   createPublicId,
   createRandomToken,
+  createSignedCsrfToken,
   hashOpaqueValue,
   hashPassword,
   verifyPassword,
 } from '../../lib/authCrypto.js';
 import { clearCookie, appendCookie, parseCookies } from '../../lib/httpCookies.js';
-import { executeStatement, queryRows, withTransaction } from '../../lib/mysql.js';
+import { executeStatement, queryRows, withTransaction, type QueryExecutor } from '../../lib/mysql.js';
+import { requireCsrf } from '../../lib/csrf.js';
 import {
   AppError,
   badRequest,
@@ -21,13 +23,26 @@ import {
 import { createAuditEvent } from '../writeSupport.js';
 import { sendEmail } from '../providers/email.js';
 import { logEvent } from '../../lib/observability.js';
-import { recordSecurityEvent, recordSecurityEventSafely } from '../../lib/securityEvents.js';
+import { getRequestIpAddress, getRequestUserAgent } from '../../lib/requestSecurity.js';
+import { recordSecurityEvent } from '../../lib/securityEvents.js';
+import { getAdminMfaRequirementMode } from '../settings/platformSettings.js';
 import {
   clearPersistentRateLimit,
   consumePersistentRateLimit,
   getPersistentRateLimitStatus,
 } from './persistentRateLimiter.js';
 import { validateStrongPassword } from './passwordPolicy.js';
+import {
+  buildAdminTotpQrDataUrl,
+  buildAdminTotpUri,
+  createAdminMfaRecoveryCodes,
+  createAdminTotpSecret,
+  decryptAdminMfaSecret,
+  encryptAdminMfaSecret,
+  hashAdminMfaRecoveryCode,
+  recoveryCodeHashMatches,
+  verifyAdminTotpCode,
+} from './mfa.js';
 
 type ActorRow = RowDataPacket & {
   account_status_code: string;
@@ -44,7 +59,6 @@ type ActorRow = RowDataPacket & {
 
 type SessionRow = RowDataPacket & {
   account_status_code: string;
-  csrf_secret_hash: string;
   display_name: string;
   email: string;
   expires_at: string;
@@ -76,6 +90,31 @@ type PasswordResetTokenRow = RowDataPacket & {
   user_id: number;
 };
 
+type AdminMfaSecretRow = RowDataPacket & {
+  enabled_at: string | null;
+  id: number;
+  last_verified_at: string | null;
+  recovery_codes_hash_json: string | null;
+  secret_encrypted: string | null;
+  user_id: number;
+};
+
+type AdminMfaChallengeRow = RowDataPacket & {
+  account_status_code: string;
+  challenge_id: number;
+  challenge_hash: string;
+  consumed_at: string | null;
+  display_name: string;
+  email: string;
+  expires_at: string;
+  login_enabled: number;
+  must_rotate_password: number | null;
+  public_id: string;
+  remember_me: number;
+  session_id?: number;
+  user_id: number;
+};
+
 export type AdminActor = {
   displayName: string;
   email: string;
@@ -92,6 +131,8 @@ const getSignInRateLimitLockMs = () => env.AUTH_RATE_LIMIT_LOCK_MINUTES * 60_000
 const ADMIN_PASSWORD_RESET_TTL_MINUTES = 30;
 const ADMIN_PASSWORD_RESET_MAX_CODE_ATTEMPTS = 5;
 const ADMIN_PASSWORD_RESET_RESPONSE_FLOOR_MS = 700;
+const ADMIN_MFA_CHALLENGE_TTL_MINUTES = 10;
+const ADMIN_MFA_MAX_CODE_ATTEMPTS = 5;
 
 const COOKIE_OPTIONS = {
   path: '/',
@@ -109,11 +150,6 @@ const toAdminSessionUser = (actor: AdminActor) => ({
 });
 
 const normalizeIdentifier = (identifier: string) => identifier.trim().toLowerCase();
-
-const getRequestIpAddress = (request: Request) =>
-  request.ip || request.socket.remoteAddress || 'unknown';
-
-const getRequestUserAgent = (request: Request) => request.header('user-agent')?.trim() || null;
 
 const toMysqlDateTime = (date: Date) => date.toISOString().slice(0, 23).replace('T', ' ');
 
@@ -253,6 +289,24 @@ const clearSignInFailures = async (identifier: string) => {
   });
 };
 
+const getActiveSessionLimitSql = () =>
+  String(Math.max(1, Math.trunc(env.MAX_ACTIVE_SESSIONS_PER_USER)));
+
+const getMfaRateLimitKeys = (scope: string, request: Request, identifier?: string) => [
+  {
+    key: `${scope}:ip:${getRequestIpAddress(request) || 'unknown'}`,
+    maxAttempts: env.AUTH_RATE_LIMIT_IP_MAX_ATTEMPTS,
+  },
+  ...(identifier
+    ? [
+        {
+          key: `${scope}:flow:${identifier}`,
+          maxAttempts: env.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+        },
+      ]
+    : []),
+];
+
 const shouldCountSignInFailure = (error: unknown) =>
   error instanceof AppError &&
   ['invalid_credentials', 'admin_access_required'].includes(error.code);
@@ -292,9 +346,6 @@ const collectActor = (rows: Array<ActorRow | SessionRow>) => {
 const getSessionToken = (request: Request) =>
   parseCookies(request.headers.cookie)[env.SESSION_COOKIE_NAME] || null;
 
-const getCsrfToken = (request: Request) =>
-  request.header('x-csrf-token') || parseCookies(request.headers.cookie)[env.CSRF_COOKIE_NAME] || null;
-
 const setSessionCookies = (
   response: Response,
   payload: { csrfToken: string; rememberMe: boolean; sessionToken: string }
@@ -314,6 +365,45 @@ const setSessionCookies = (
 export const clearSessionCookies = (response: Response) => {
   clearCookie(response, env.SESSION_COOKIE_NAME, COOKIE_OPTIONS);
   clearCookie(response, env.CSRF_COOKIE_NAME, COOKIE_OPTIONS);
+};
+
+export const pruneActiveSessionsForUser = async (
+  userId: number,
+  executor: QueryExecutor
+) => {
+  const activeSessionLimit = getActiveSessionLimitSql();
+
+  await executeStatement(
+    `UPDATE user_sessions
+        SET revoked_at = COALESCE(revoked_at, UTC_TIMESTAMP(6)),
+            updated_at = UTC_TIMESTAMP(6)
+      WHERE user_id = ?
+        AND revoked_at IS NULL
+        AND expires_at <= UTC_TIMESTAMP(6)`,
+    [userId],
+    executor
+  );
+
+  await executeStatement(
+    `UPDATE user_sessions
+        SET revoked_at = UTC_TIMESTAMP(6),
+            updated_at = UTC_TIMESTAMP(6)
+      WHERE user_id = ?
+        AND revoked_at IS NULL
+        AND id NOT IN (
+          SELECT id FROM (
+            SELECT id
+              FROM user_sessions
+             WHERE user_id = ?
+               AND revoked_at IS NULL
+               AND expires_at > UTC_TIMESTAMP(6)
+             ORDER BY created_at DESC, id DESC
+             LIMIT ${activeSessionLimit}
+          ) keep_sessions
+        )`,
+    [userId, userId],
+    executor
+  );
 };
 
 const fetchActorByIdentifier = async (identifier: string) => {
@@ -341,7 +431,7 @@ const fetchActorByIdentifier = async (identifier: string) => {
       AND r.is_active = 1
       AND r.code <> 'client'
      LEFT JOIN role_permissions rp ON rp.role_code = r.code
-     WHERE (LOWER(u.email) = LOWER(?) OR u.phone = ?)
+     WHERE (u.email = ? OR u.phone = ?)
        AND u.archived_at IS NULL
        AND u.actor_type_code <> 'client'`,
     [identifier, identifier]
@@ -353,13 +443,176 @@ const fetchActorByIdentifier = async (identifier: string) => {
   };
 };
 
+const fetchActorByUserId = async (userId: number, executor?: QueryExecutor) => {
+  const rows = await queryRows<ActorRow>(
+    `SELECT
+       u.id AS user_id,
+       u.public_id,
+       u.email,
+       u.display_name,
+       u.login_enabled,
+       u.account_status_code,
+       uc.password_hash,
+       uc.must_rotate_password,
+       r.code AS role_code,
+       rp.permission_code
+     FROM users u
+     LEFT JOIN user_credentials uc ON uc.user_id = u.id
+     LEFT JOIN user_roles ur
+       ON ur.user_id = u.id
+      AND ur.is_active = 1
+      AND (ur.starts_at IS NULL OR ur.starts_at <= UTC_TIMESTAMP(6))
+      AND (ur.ends_at IS NULL OR ur.ends_at >= UTC_TIMESTAMP(6))
+     LEFT JOIN roles r
+       ON r.code = ur.role_code
+      AND r.is_active = 1
+      AND r.code <> 'client'
+     LEFT JOIN role_permissions rp ON rp.role_code = r.code
+     WHERE u.id = ?
+       AND u.archived_at IS NULL
+       AND u.actor_type_code <> 'client'`,
+    [userId],
+    executor
+  );
+
+  return collectActor(rows);
+};
+
+const fetchAdminMfaSecret = async (userId: number, executor?: QueryExecutor) => {
+  const rows = await queryRows<AdminMfaSecretRow>(
+    `SELECT
+       id,
+       user_id,
+       secret_encrypted,
+       enabled_at,
+       recovery_codes_hash_json,
+       last_verified_at
+     FROM admin_mfa_secrets
+     WHERE user_id = ?
+     LIMIT 1`,
+    [userId],
+    executor
+  );
+
+  return rows[0] || null;
+};
+
+const isAdminMfaEnabled = (row: AdminMfaSecretRow | null) =>
+  Boolean(row?.enabled_at && row.secret_encrypted);
+
+const createAdminSessionRecord = async (
+  actor: AdminActor,
+  rememberMe: boolean,
+  request: Request,
+  executor: QueryExecutor
+) => {
+  const sessionToken = createRandomToken();
+  const csrfToken = createSignedCsrfToken(env.AUTH_SESSION_SECRET);
+  const sessionTokenHash = hashOpaqueValue(sessionToken, env.AUTH_SESSION_SECRET);
+
+  // csrf_secret_hash is a legacy required column; active CSRF validation uses the signed double-submit cookie.
+  await executeStatement(
+    `INSERT INTO user_sessions (
+       public_id, user_id, session_token_hash, csrf_secret_hash, remember_me, ip_address,
+       user_agent, device_label, expires_at, last_seen_at, revoked_at, created_at, updated_at
+     ) VALUES (
+       ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6) + INTERVAL ? HOUR, UTC_TIMESTAMP(6),
+       NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+     )`,
+    [
+      createPublicId(),
+      actor.userId,
+      sessionTokenHash,
+      sessionTokenHash,
+      rememberMe ? 1 : 0,
+      getRequestIpAddress(request),
+      getRequestUserAgent(request),
+      null,
+      rememberMe ? env.REMEMBER_ME_TTL_DAYS * 24 : env.SESSION_TTL_HOURS,
+    ],
+    executor
+  );
+
+  await executeStatement(
+    `UPDATE users SET last_login_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6) WHERE id = ?`,
+    [actor.userId],
+    executor
+  );
+
+  await pruneActiveSessionsForUser(actor.userId, executor);
+
+  return {
+    csrfToken,
+    sessionToken,
+  };
+};
+
+const issueAdminSession = async (
+  actor: AdminActor,
+  rememberMe: boolean,
+  request: Request,
+  response: Response
+) => {
+  const tokens = await withTransaction((connection) =>
+    createAdminSessionRecord(actor, rememberMe, request, connection)
+  );
+
+  setSessionCookies(response, {
+    csrfToken: tokens.csrfToken,
+    rememberMe,
+    sessionToken: tokens.sessionToken,
+  });
+
+  return {
+    authenticated: true,
+    user: toAdminSessionUser(actor),
+  };
+};
+
+const createAdminMfaChallenge = async (
+  actor: AdminActor,
+  rememberMe: boolean,
+  request: Request
+) => {
+  const challengeToken = createRandomToken();
+  const challengeHash = hashOpaqueValue(challengeToken, env.AUTH_SESSION_SECRET);
+
+  await executeStatement(
+    `INSERT INTO admin_mfa_challenges (
+       public_id,
+       user_id,
+       challenge_hash,
+       remember_me,
+       expires_at,
+       consumed_at,
+       attempt_count,
+       ip_address,
+       user_agent,
+       created_at,
+       updated_at
+     ) VALUES (
+       ?, ?, ?, ?, UTC_TIMESTAMP(6) + INTERVAL ? MINUTE, NULL, 0, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+     )`,
+    [
+      createPublicId(),
+      actor.userId,
+      challengeHash,
+      rememberMe ? 1 : 0,
+      ADMIN_MFA_CHALLENGE_TTL_MINUTES,
+      getRequestIpAddress(request),
+      getRequestUserAgent(request),
+    ]
+  );
+
+  return challengeToken;
+};
+
 const fetchActorBySessionToken = async (rawSessionToken: string) => {
   const hashedToken = hashOpaqueValue(rawSessionToken, env.AUTH_SESSION_SECRET);
   const rows = await queryRows<SessionRow>(
     `SELECT
        us.id AS session_id,
        us.user_id,
-       us.csrf_secret_hash,
        us.expires_at,
        us.last_seen_at,
        u.public_id,
@@ -402,7 +655,6 @@ const fetchActorBySessionToken = async (rawSessionToken: string) => {
 
   return {
     actor,
-    csrfHash: rows[0]!.csrf_secret_hash,
     lastSeenAt: fromMysqlDateTime(rows[0]!.last_seen_at),
     sessionId: rows[0]!.session_id,
   };
@@ -527,7 +779,6 @@ export const getSession = async (request: Request, response: Response) => {
     clearSessionCookies(response);
     return {
       authenticated: false,
-      csrfToken: null,
       user: null,
     };
   }
@@ -538,7 +789,6 @@ export const getSession = async (request: Request, response: Response) => {
     clearSessionCookies(response);
     return {
       authenticated: false,
-      csrfToken: null,
       user: null,
     };
   }
@@ -549,15 +799,7 @@ export const getSession = async (request: Request, response: Response) => {
     ]);
   }
 
-  const csrfToken = getCsrfToken(request) || createRandomToken(18);
-  const expectedHash = hashOpaqueValue(csrfToken, env.AUTH_SESSION_SECRET);
-
-  if (expectedHash !== resolution.csrfHash) {
-    await queryRows(`UPDATE user_sessions SET csrf_secret_hash = ?, updated_at = UTC_TIMESTAMP(6) WHERE id = ?`, [
-      expectedHash,
-      resolution.sessionId,
-    ]);
-  }
+  const csrfToken = createSignedCsrfToken(env.AUTH_SESSION_SECRET);
 
   appendCookie(response, env.CSRF_COOKIE_NAME, csrfToken, {
     ...COOKIE_OPTIONS,
@@ -566,7 +808,6 @@ export const getSession = async (request: Request, response: Response) => {
 
   return {
     authenticated: true,
-    csrfToken,
     user: toAdminSessionUser(resolution.actor),
   };
 };
@@ -602,50 +843,45 @@ export const signIn = async (
       );
     }
 
-    const sessionToken = createRandomToken();
-    const csrfToken = createRandomToken(18);
-    const sessionTokenHash = hashOpaqueValue(sessionToken, env.AUTH_SESSION_SECRET);
-    const csrfTokenHash = hashOpaqueValue(csrfToken, env.AUTH_SESSION_SECRET);
-
-    await queryRows(
-      `INSERT INTO user_sessions (
-         public_id, user_id, session_token_hash, csrf_secret_hash, remember_me, ip_address,
-         user_agent, device_label, expires_at, last_seen_at, revoked_at, created_at, updated_at
-       ) VALUES (
-         ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6) + INTERVAL ? HOUR, UTC_TIMESTAMP(6),
-         NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
-       )`,
-      [
-        createPublicId(),
-        actor.userId,
-        sessionTokenHash,
-        csrfTokenHash,
-        rememberMe ? 1 : 0,
-        request.ip,
-        request.header('user-agent')?.trim() || null,
-        null,
-        rememberMe ? env.REMEMBER_ME_TTL_DAYS * 24 : env.SESSION_TTL_HOURS,
-      ]
-    );
-
-    await queryRows(
-      `UPDATE users SET last_login_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6) WHERE id = ?`,
-      [actor.userId]
-    );
-
     await clearSignInFailures(identifier);
 
-    setSessionCookies(response, {
-      csrfToken,
-      rememberMe,
-      sessionToken,
-    });
+    const mfaSecret = await fetchAdminMfaSecret(actor.userId);
+    if (isAdminMfaEnabled(mfaSecret)) {
+      const mfaToken = await createAdminMfaChallenge(actor, rememberMe, request);
+      await recordSecurityEvent({
+        eventTypeCode: 'admin.mfa_required',
+        ipAddress: getRequestIpAddress(request),
+        success: true,
+        userAgent: getRequestUserAgent(request),
+        userId: actor.userId,
+      });
 
-    return {
-      authenticated: true,
-      csrfToken,
-      user: toAdminSessionUser(actor),
-    };
+      return {
+        authenticated: false,
+        mfaRequired: true,
+        mfaToken,
+        message: 'Enter the 6-digit code from your authenticator app.',
+        user: null,
+      };
+    }
+
+    const mfaRequirementMode = await getAdminMfaRequirementMode();
+    if (mfaRequirementMode === 'enforce') {
+      await recordSecurityEvent({
+        eventTypeCode: 'admin.mfa_required',
+        identifierValue: normalizeIdentifier(identifier),
+        ipAddress: getRequestIpAddress(request),
+        success: false,
+        userAgent: getRequestUserAgent(request),
+        userId: actor.userId,
+      });
+      throw forbidden(
+        'admin_mfa_enrollment_required',
+        'Multi-factor authentication is required for admin access. Ask an ops administrator to help complete enrollment or temporarily switch MFA rollout to warn mode.'
+      );
+    }
+
+    return await issueAdminSession(actor, rememberMe, request, response);
   } catch (error) {
     if (shouldCountSignInFailure(error)) {
       await recordSecurityEvent({
@@ -660,6 +896,478 @@ export const signIn = async (
 
     throw error;
   }
+};
+
+const recordAdminMfaAudit = async (
+  input: {
+    actionCode: 'admin.mfa_disabled' | 'admin.mfa_enrolled' | 'admin.mfa_failed' | 'admin.mfa_verified';
+    actorRoleCode?: string;
+    actorUserId: number | null;
+    changes?: Array<{ fieldName: string; newValue: unknown; oldValue?: unknown }>;
+    entityUserId: number;
+    summary?: Record<string, unknown>;
+  },
+  executor?: QueryExecutor
+) => {
+  await createAuditEvent(
+    {
+      actionCode: input.actionCode,
+      actionLabel: input.actionCode
+        .replace(/^admin\./, 'Admin ')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (value) => value.toUpperCase()),
+      actorRoleCode: input.actorRoleCode || 'ops_admin',
+      actorUserId: input.actorUserId,
+      changes: input.changes || [],
+      entityPk: input.entityUserId,
+      entityTableName: 'users',
+      sourceModule: 'admin_auth',
+      summaryNewValue: input.summary || { mfaEvent: input.actionCode },
+    },
+    executor
+  );
+};
+
+const parseRecoveryCodeHashes = (value: string | null | undefined) => {
+  if (!value) {
+    return [] as string[];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+const verifyAdminMfaProof = (
+  secretRow: AdminMfaSecretRow,
+  code: string
+): { nextRecoveryCodeHashes: string[]; usedRecoveryCode: boolean; valid: boolean } => {
+  if (!secretRow.secret_encrypted) {
+    return {
+      nextRecoveryCodeHashes: parseRecoveryCodeHashes(secretRow.recovery_codes_hash_json),
+      usedRecoveryCode: false,
+      valid: false,
+    };
+  }
+
+  const secret = decryptAdminMfaSecret(secretRow.secret_encrypted);
+  if (verifyAdminTotpCode(secret, code)) {
+    return {
+      nextRecoveryCodeHashes: parseRecoveryCodeHashes(secretRow.recovery_codes_hash_json),
+      usedRecoveryCode: false,
+      valid: true,
+    };
+  }
+
+  const recoveryCodeHashes = parseRecoveryCodeHashes(secretRow.recovery_codes_hash_json);
+  const recoveryCodeIndex = recoveryCodeHashes.findIndex((hash) =>
+    recoveryCodeHashMatches(code, hash)
+  );
+
+  if (recoveryCodeIndex === -1) {
+    return {
+      nextRecoveryCodeHashes: recoveryCodeHashes,
+      usedRecoveryCode: false,
+      valid: false,
+    };
+  }
+
+  return {
+    nextRecoveryCodeHashes: recoveryCodeHashes.filter((_, index) => index !== recoveryCodeIndex),
+    usedRecoveryCode: true,
+    valid: true,
+  };
+};
+
+export const verifyMfaSignIn = async (
+  payload: { code: string; mfaToken: string },
+  request: Request,
+  response: Response
+) => {
+  const mfaToken = payload.mfaToken.trim();
+  const challengeHash = hashOpaqueValue(mfaToken, env.AUTH_SESSION_SECRET);
+
+  await consumeAuthRateLimits(getMfaRateLimitKeys('mfa-signin', request, challengeHash));
+
+  const result = await withTransaction(async (connection) => {
+    const challengeRows = await queryRows<AdminMfaChallengeRow>(
+      `SELECT
+         id AS challenge_id,
+         user_id,
+         challenge_hash,
+         remember_me,
+         expires_at,
+         consumed_at,
+         attempt_count
+       FROM admin_mfa_challenges
+       WHERE challenge_hash = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [challengeHash],
+      connection
+    );
+    const challenge = challengeRows[0] || null;
+
+    if (!challenge) {
+      return { status: 'invalid' as const, tooMany: false, userId: null };
+    }
+
+    const expiresAt = fromMysqlDateTime(challenge.expires_at);
+    if (
+      challenge.consumed_at ||
+      !expiresAt ||
+      expiresAt.getTime() <= Date.now() ||
+      challenge.attempt_count >= ADMIN_MFA_MAX_CODE_ATTEMPTS
+    ) {
+      return {
+        status: 'invalid' as const,
+        tooMany: challenge.attempt_count >= ADMIN_MFA_MAX_CODE_ATTEMPTS,
+        userId: challenge.user_id,
+      };
+    }
+
+    const actor = await fetchActorByUserId(challenge.user_id, connection);
+    const mfaSecret = await fetchAdminMfaSecret(challenge.user_id, connection);
+
+    if (!actor || !isAdminMfaEnabled(mfaSecret)) {
+      return { status: 'invalid' as const, tooMany: false, userId: challenge.user_id };
+    }
+
+    const verification = verifyAdminMfaProof(mfaSecret!, payload.code);
+    if (!verification.valid) {
+      const nextAttemptCount = challenge.attempt_count + 1;
+      await executeStatement(
+        `UPDATE admin_mfa_challenges
+            SET attempt_count = attempt_count + 1,
+                updated_at = UTC_TIMESTAMP(6)
+          WHERE id = ?`,
+        [challenge.challenge_id],
+        connection
+      );
+      await recordAdminMfaAudit(
+        {
+          actionCode: 'admin.mfa_failed',
+          actorUserId: actor.userId,
+          entityUserId: actor.userId,
+          summary: { reason: 'invalid_code', surface: 'sign_in' },
+        },
+        connection
+      );
+      await recordSecurityEvent(
+        {
+          eventTypeCode: 'admin.mfa_failed',
+          ipAddress: getRequestIpAddress(request),
+          success: false,
+          userAgent: getRequestUserAgent(request),
+          userId: actor.userId,
+        },
+        connection
+      );
+
+      return {
+        status: 'invalid' as const,
+        tooMany: nextAttemptCount >= ADMIN_MFA_MAX_CODE_ATTEMPTS,
+        userId: actor.userId,
+      };
+    }
+
+    await executeStatement(
+      `UPDATE admin_mfa_challenges
+          SET consumed_at = UTC_TIMESTAMP(6),
+              updated_at = UTC_TIMESTAMP(6)
+        WHERE id = ?`,
+      [challenge.challenge_id],
+      connection
+    );
+    await executeStatement(
+      `UPDATE admin_mfa_secrets
+          SET recovery_codes_hash_json = ?,
+              last_verified_at = UTC_TIMESTAMP(6),
+              updated_at = UTC_TIMESTAMP(6)
+        WHERE id = ?`,
+      [JSON.stringify(verification.nextRecoveryCodeHashes), mfaSecret!.id],
+      connection
+    );
+    await recordAdminMfaAudit(
+      {
+        actionCode: 'admin.mfa_verified',
+        actorUserId: actor.userId,
+        entityUserId: actor.userId,
+        summary: {
+          surface: 'sign_in',
+          usedRecoveryCode: verification.usedRecoveryCode,
+        },
+      },
+      connection
+    );
+    await recordSecurityEvent(
+      {
+        eventTypeCode: 'admin.mfa_verified',
+        ipAddress: getRequestIpAddress(request),
+        success: true,
+        userAgent: getRequestUserAgent(request),
+        userId: actor.userId,
+      },
+      connection
+    );
+
+    const tokens = await createAdminSessionRecord(
+      actor,
+      Boolean(challenge.remember_me),
+      request,
+      connection
+    );
+
+    return {
+      actor,
+      rememberMe: Boolean(challenge.remember_me),
+      status: 'verified' as const,
+      tokens,
+    };
+  });
+
+  if (result.status !== 'verified') {
+    if (result.tooMany) {
+      throw tooManyRequests(
+        'admin_mfa_rate_limited',
+        'Too many invalid verification attempts. Sign in again and try a new code.',
+        { retryAfterSeconds: ADMIN_MFA_CHALLENGE_TTL_MINUTES * 60 }
+      );
+    }
+
+    throw unauthorized('invalid_mfa_code', 'Invalid or expired verification code.');
+  }
+
+  setSessionCookies(response, {
+    csrfToken: result.tokens.csrfToken,
+    rememberMe: result.rememberMe,
+    sessionToken: result.tokens.sessionToken,
+  });
+
+  return {
+    authenticated: true,
+    user: toAdminSessionUser(result.actor),
+  };
+};
+
+export const startMfaEnrollment = async (request: Request) => {
+  const actor = await requireAdminSession(request, { requireCsrf: true });
+  await consumeAuthRateLimits(getMfaRateLimitKeys('mfa-enroll', request, String(actor.userId)));
+
+  const existing = await fetchAdminMfaSecret(actor.userId);
+  if (isAdminMfaEnabled(existing)) {
+    throw badRequest('admin_mfa_already_enabled', 'Authenticator app verification is already enabled.');
+  }
+
+  const secret = createAdminTotpSecret();
+  const provisioningUri = buildAdminTotpUri(actor.email, secret);
+
+  await executeStatement(
+    `INSERT INTO admin_mfa_secrets (
+       user_id,
+       secret_encrypted,
+       enabled_at,
+       recovery_codes_hash_json,
+       last_verified_at,
+       created_at,
+       updated_at
+     ) VALUES (?, ?, NULL, NULL, NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+     ON DUPLICATE KEY UPDATE
+       secret_encrypted = VALUES(secret_encrypted),
+       enabled_at = NULL,
+       recovery_codes_hash_json = NULL,
+       last_verified_at = NULL,
+       updated_at = UTC_TIMESTAMP(6)`,
+    [actor.userId, encryptAdminMfaSecret(secret)]
+  );
+
+  return {
+    provisioningUri,
+    qrCodeDataUrl: await buildAdminTotpQrDataUrl(provisioningUri),
+    status: 'mfa_enrollment_started' as const,
+  };
+};
+
+export const verifyMfaEnrollment = async (request: Request, code: string) => {
+  const actor = await requireAdminSession(request, { requireCsrf: true });
+  await consumeAuthRateLimits(getMfaRateLimitKeys('mfa-enroll-verify', request, String(actor.userId)));
+
+  const mfaSecret = await fetchAdminMfaSecret(actor.userId);
+  if (!mfaSecret?.secret_encrypted || mfaSecret.enabled_at) {
+    throw badRequest('admin_mfa_enrollment_not_started', 'Start MFA enrollment before verifying a code.');
+  }
+
+  const secret = decryptAdminMfaSecret(mfaSecret.secret_encrypted);
+  if (!verifyAdminTotpCode(secret, code)) {
+    await recordAdminMfaAudit({
+      actionCode: 'admin.mfa_failed',
+      actorRoleCode: actor.roleCodes[0],
+      actorUserId: actor.userId,
+      entityUserId: actor.userId,
+      summary: { reason: 'invalid_code', surface: 'enrollment' },
+    });
+    await recordSecurityEvent({
+      eventTypeCode: 'admin.mfa_failed',
+      ipAddress: getRequestIpAddress(request),
+      success: false,
+      userAgent: getRequestUserAgent(request),
+      userId: actor.userId,
+    });
+    throw unauthorized('invalid_mfa_code', 'Invalid verification code.');
+  }
+
+  const recoveryCodes = createAdminMfaRecoveryCodes();
+  const recoveryCodeHashes = recoveryCodes.map(hashAdminMfaRecoveryCode);
+
+  await withTransaction(async (connection) => {
+    await executeStatement(
+      `UPDATE admin_mfa_secrets
+          SET enabled_at = UTC_TIMESTAMP(6),
+              recovery_codes_hash_json = ?,
+              last_verified_at = UTC_TIMESTAMP(6),
+              updated_at = UTC_TIMESTAMP(6)
+        WHERE id = ?`,
+      [JSON.stringify(recoveryCodeHashes), mfaSecret.id],
+      connection
+    );
+    await recordAdminMfaAudit(
+      {
+        actionCode: 'admin.mfa_enrolled',
+        actorRoleCode: actor.roleCodes[0],
+        actorUserId: actor.userId,
+        changes: [{ fieldName: 'mfa_enabled', newValue: true, oldValue: false }],
+        entityUserId: actor.userId,
+        summary: { mfaEnabled: true },
+      },
+      connection
+    );
+    await recordAdminMfaAudit(
+      {
+        actionCode: 'admin.mfa_verified',
+        actorRoleCode: actor.roleCodes[0],
+        actorUserId: actor.userId,
+        entityUserId: actor.userId,
+        summary: { surface: 'enrollment' },
+      },
+      connection
+    );
+    await recordSecurityEvent(
+      {
+        eventTypeCode: 'admin.mfa_enrolled',
+        ipAddress: getRequestIpAddress(request),
+        success: true,
+        userAgent: getRequestUserAgent(request),
+        userId: actor.userId,
+      },
+      connection
+    );
+  });
+
+  return {
+    recoveryCodes,
+    status: 'mfa_enabled' as const,
+  };
+};
+
+export const disableMfa = async (
+  request: Request,
+  payload: { code: string; currentPassword: string }
+) => {
+  const actor = await requireAdminSession(request, { requireCsrf: true });
+  await consumeAuthRateLimits(getMfaRateLimitKeys('mfa-disable', request, String(actor.userId)));
+
+  if ((await getAdminMfaRequirementMode()) === 'enforce') {
+    throw forbidden(
+      'admin_mfa_required',
+      'MFA is currently enforced for admin access. Switch the rollout mode before disabling MFA.'
+    );
+  }
+
+  const credentialRows = await queryRows<CredentialRow>(
+    `SELECT password_hash, must_rotate_password
+     FROM user_credentials
+     WHERE user_id = ?
+     LIMIT 1`,
+    [actor.userId]
+  );
+  const credential = credentialRows[0] || null;
+  const passwordMatches =
+    credential && (await verifyPassword(payload.currentPassword, credential.password_hash));
+
+  if (!passwordMatches) {
+    throw unauthorized('invalid_credentials', 'Invalid password or verification code.');
+  }
+
+  const mfaSecret = await fetchAdminMfaSecret(actor.userId);
+  if (!isAdminMfaEnabled(mfaSecret)) {
+    throw badRequest('admin_mfa_not_enabled', 'Authenticator app verification is not enabled.');
+  }
+
+  const secret = decryptAdminMfaSecret(mfaSecret!.secret_encrypted!);
+  if (!verifyAdminTotpCode(secret, payload.code)) {
+    await recordAdminMfaAudit({
+      actionCode: 'admin.mfa_failed',
+      actorRoleCode: actor.roleCodes[0],
+      actorUserId: actor.userId,
+      entityUserId: actor.userId,
+      summary: { reason: 'invalid_code', surface: 'disable' },
+    });
+    await recordSecurityEvent({
+      eventTypeCode: 'admin.mfa_failed',
+      ipAddress: getRequestIpAddress(request),
+      success: false,
+      userAgent: getRequestUserAgent(request),
+      userId: actor.userId,
+    });
+    throw unauthorized('invalid_credentials', 'Invalid password or verification code.');
+  }
+
+  await withTransaction(async (connection) => {
+    await executeStatement(
+      `DELETE FROM admin_mfa_secrets WHERE user_id = ?`,
+      [actor.userId],
+      connection
+    );
+    await executeStatement(
+      `UPDATE admin_mfa_challenges
+          SET consumed_at = COALESCE(consumed_at, UTC_TIMESTAMP(6)),
+              updated_at = UTC_TIMESTAMP(6)
+        WHERE user_id = ?
+          AND consumed_at IS NULL`,
+      [actor.userId],
+      connection
+    );
+    await recordAdminMfaAudit(
+      {
+        actionCode: 'admin.mfa_disabled',
+        actorRoleCode: actor.roleCodes[0],
+        actorUserId: actor.userId,
+        changes: [{ fieldName: 'mfa_enabled', newValue: false, oldValue: true }],
+        entityUserId: actor.userId,
+        summary: { mfaEnabled: false },
+      },
+      connection
+    );
+    await recordSecurityEvent(
+      {
+        eventTypeCode: 'admin.mfa_disabled',
+        ipAddress: getRequestIpAddress(request),
+        success: true,
+        userAgent: getRequestUserAgent(request),
+        userId: actor.userId,
+      },
+      connection
+    );
+  });
+
+  return {
+    status: 'mfa_disabled' as const,
+  };
 };
 
 export const signOut = async (request: Request, response: Response) => {
@@ -1025,15 +1733,7 @@ export const requireAdminSession = async (
   }
 
   if (options?.requireCsrf) {
-    const csrfToken = getCsrfToken(request);
-    if (!csrfToken || hashOpaqueValue(csrfToken, env.AUTH_SESSION_SECRET) !== resolution.csrfHash) {
-      recordSecurityEventSafely({
-        eventTypeCode: 'admin.csrf_mismatch',
-        success: false,
-        userId: resolution.actor.userId,
-      });
-      throw forbidden('csrf_mismatch', 'CSRF validation failed.');
-    }
+    requireCsrf(request);
   }
 
   if (resolution.actor.mustRotatePassword && !options?.allowPasswordRotationRequired) {

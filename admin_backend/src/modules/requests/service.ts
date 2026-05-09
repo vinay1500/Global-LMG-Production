@@ -97,6 +97,7 @@ const STATUS_LABELS: Record<string, string> = {
   converted: 'Converted',
   'lost-closed': 'Lost / Closed',
   'new-lead': 'New Lead',
+  submitted: 'Submitted',
 };
 
 const TERMINAL_STATUSES = new Set(['converted', 'lost-closed']);
@@ -480,9 +481,9 @@ export const getWorkspace = async () => {
   const [metricRows, requestRows] = await Promise.all([
     queryRows<RequestMetricRow>(
       `SELECT
-         SUM(CASE WHEN sr.status_code NOT IN ('converted', 'lost-closed') THEN 1 ELSE 0 END) AS openRequests,
+         SUM(CASE WHEN sr.status_code NOT IN ('draft_payment_pending', 'converted', 'lost-closed') THEN 1 ELSE 0 END) AS openRequests,
          SUM(CASE WHEN pur.urgency_code IN ('within-2hrs', 'within-6hrs')
-                    AND sr.status_code NOT IN ('converted', 'lost-closed')
+                    AND sr.status_code NOT IN ('draft_payment_pending', 'converted', 'lost-closed')
                   THEN 1 ELSE 0 END) AS urgentRequests,
          SUM(CASE WHEN sr.preferred_start_at IS NOT NULL THEN 1 ELSE 0 END) AS scheduledConsultations,
          SUM(
@@ -496,7 +497,8 @@ export const getWorkspace = async () => {
        FROM service_requests sr
        INNER JOIN pricing_urgency_rules pur ON pur.id = sr.urgency_rule_id
        LEFT JOIN matters m ON m.service_request_id = sr.id AND m.archived_at IS NULL
-       WHERE sr.archived_at IS NULL`
+       WHERE sr.archived_at IS NULL
+         AND sr.status_code <> 'draft_payment_pending'`
     ),
     queryRows<RequestRow>(
       `SELECT
@@ -532,6 +534,7 @@ export const getWorkspace = async () => {
        LEFT JOIN request_services req_services ON req_services.service_request_id = sr.id
        LEFT JOIN services ON services.id = req_services.service_id
        WHERE sr.archived_at IS NULL
+         AND sr.status_code <> 'draft_payment_pending'
        GROUP BY
          sr.id,
          sr.public_id,

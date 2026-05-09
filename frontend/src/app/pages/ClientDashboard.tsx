@@ -414,7 +414,46 @@ export const ClientDashboard = () => {
   };
 
   const handleNewRequestSubmit = async (submission: RequestData) => {
-    await submitRequest(submission);
+    const result = await submitRequest(submission);
+    await loadRazorpayCheckout();
+
+    const RazorpayCheckout = window.Razorpay;
+    if (!RazorpayCheckout) {
+      throw new Error('Online checkout is unavailable. Please try again.');
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const checkout = new RazorpayCheckout({
+        amount: result.paymentOrder.amountMinor,
+        currency: result.paymentOrder.currencyCode,
+        description: `Request ${result.paymentOrder.requestNumber}`,
+        handler: async (checkoutResponse) => {
+          try {
+            await dashboardApi.verifyRequestPayment(result.requestId, checkoutResponse);
+            await reloadDashboard();
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        },
+        key: result.paymentOrder.keyId,
+        modal: {
+          ondismiss: () => reject(new Error('Complete payment to submit your request.')),
+        },
+        name: BRAND_NAME,
+        order_id: result.paymentOrder.orderId,
+        prefill: {
+          contact: result.paymentOrder.customer.phone,
+          email: result.paymentOrder.customer.email,
+          name: result.paymentOrder.customer.name,
+        },
+        theme: {
+          color: '#111827',
+        },
+      });
+
+      checkout.open();
+    });
     setSelectedMatter(null);
     handleTabChange('cases');
     setSearchQuery('');

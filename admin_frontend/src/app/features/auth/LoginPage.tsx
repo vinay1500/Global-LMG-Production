@@ -1,17 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, Eye, EyeOff, Scale } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, Eye, EyeOff, KeyRound, Scale } from 'lucide-react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { authApi } from '../../lib/api/auth';
 import { ApiRequestError } from '../../lib/api/client';
 import { useAdminSession } from '../../providers/AdminSessionProvider';
 
-type LoginView = 'forgot' | 'reset' | 'signin';
+type LoginView = 'forgot' | 'mfa' | 'reset' | 'signin';
 
 export const LoginPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { isAuthenticated, mustRotatePassword, signIn } = useAdminSession();
+  const { isAuthenticated, mustRotatePassword, signIn, verifyMfa } = useAdminSession();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
@@ -29,6 +29,8 @@ export const LoginPage = () => {
   const [resetCode, setResetCode] = useState('');
   const [resetPassword, setResetPassword] = useState('');
   const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [mfaToken, setMfaToken] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
 
   const from = (location.state as { from?: string } | null)?.from || '/dashboard';
 
@@ -49,6 +51,13 @@ export const LoginPage = () => {
 
     try {
       const result = await signIn({ identifier, password, rememberMe });
+      if (result.status === 'mfa_required' && result.mfaToken) {
+        setMfaToken(result.mfaToken);
+        setMfaCode('');
+        setSuccessMessage(result.message || 'Enter the code from your authenticator app.');
+        setView('mfa');
+        return;
+      }
       navigate(result.status === 'password_rotation_required' ? '/change-password' : from, {
         replace: true,
         state: { from },
@@ -58,6 +67,29 @@ export const LoginPage = () => {
         setErrorMessage(error.message);
       } else {
         setErrorMessage('Unable to sign in right now.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleMfaSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const result = await verifyMfa({ code: mfaCode, mfaToken });
+      navigate(result.status === 'password_rotation_required' ? '/change-password' : from, {
+        replace: true,
+        state: { from },
+      });
+    } catch (error) {
+      if (error instanceof ApiRequestError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage('Unable to verify your code right now.');
       }
     } finally {
       setIsSubmitting(false);
@@ -145,7 +177,9 @@ export const LoginPage = () => {
             ? 'Use your Global LMG admin credentials to continue.'
             : view === 'forgot'
               ? 'Enter your admin email or phone. If an account exists, reset instructions will be sent.'
-              : 'Enter the reset token, code, and a strong new password.'}
+              : view === 'mfa'
+                ? 'Enter the code from your authenticator app to finish signing in.'
+                : 'Enter the reset token, code, and a strong new password.'}
         </p>
 
         {errorMessage ? (
@@ -263,6 +297,49 @@ export const LoginPage = () => {
               type="submit"
             >
               {isSubmitting ? 'Requesting...' : 'Request reset'}
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </form>
+        ) : null}
+
+        {view === 'mfa' ? (
+          <form className="space-y-4" onSubmit={handleMfaSubmit}>
+            <button
+              className="inline-flex items-center gap-2 text-sm text-[#5A7C96] hover:underline"
+              onClick={() => {
+                setErrorMessage(null);
+                setSuccessMessage(null);
+                setMfaToken('');
+                setMfaCode('');
+                setView('signin');
+              }}
+              type="button"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to sign in
+            </button>
+            <label className="block">
+              <span className="text-sm font-medium text-[#2C2B29]">Authenticator or recovery code</span>
+              <div className="relative mt-2">
+                <input
+                  autoComplete="one-time-code"
+                  className="w-full rounded-lg border border-[#E6E4DD] bg-[#FCFBF8] px-4 py-3 pr-12 text-sm tracking-[0.18em] outline-none focus:border-[#C19A5B]"
+                  inputMode="numeric"
+                  onChange={(event) => setMfaCode(event.target.value)}
+                  placeholder="000000"
+                  required
+                  type="text"
+                  value={mfaCode}
+                />
+                <KeyRound className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8C8981]" />
+              </div>
+            </label>
+            <button
+              className="w-full rounded-lg bg-[#2C2B29] text-white py-3 text-sm font-medium hover:bg-[#4A4946] transition flex items-center justify-center gap-2 disabled:opacity-60"
+              disabled={isSubmitting || !mfaToken}
+              type="submit"
+            >
+              {isSubmitting ? 'Verifying...' : 'Verify & Sign In'}
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>

@@ -16,7 +16,13 @@ import { selectOne, withTransaction } from '../../lib/mysqlUtils.js';
 import { getRequestContext, logEvent } from '../../lib/observability.js';
 import { allocateBusinessNumber } from '../platform/sequences.js';
 import { LocalDocumentStorage } from './localDocumentStorage.js';
-import { isScanBlocked, scanDocumentContent } from './malwareScanner.js';
+import {
+  getInitialDocumentScanResult,
+  isScanBlocked,
+  scanDocumentContent,
+  shouldRunBackgroundScan,
+  type DocumentScanResult,
+} from './malwareScanner.js';
 import { MysqlStoredUploadRepository } from './mysqlStoredUploadRepository.js';
 import { S3DocumentStorage } from './s3DocumentStorage.js';
 import type {
@@ -108,6 +114,23 @@ const serializeError = (error: unknown) =>
         stack: error.stack,
       }
     : error;
+
+const truncate = (value: string, maxLength = 500) =>
+  value.length > maxLength ? value.slice(0, maxLength - 1) : value;
+
+const toScanFailureResult = (error: unknown): DocumentScanResult => ({
+  errorText: error instanceof Error ? truncate(error.message) : 'Scanner request failed.',
+  providerCode: env.FILE_SCAN_MODE === 'clamav' ? 'clamav' : 'disabled',
+  status: 'scan_failed',
+});
+
+const scanActionCode = (status: string) => {
+  if (status === 'clean') return 'document.scan_clean';
+  if (status === 'infected') return 'document.scan_infected';
+  if (status === 'scan_failed') return 'document.scan_failed';
+  if (status === 'scan_skipped_manual_mode') return 'document.scan_skipped';
+  return 'document.scan_requested';
+};
 
 const getRepository = async () => {
   if (!repositoryPromise) {
@@ -281,6 +304,101 @@ const insertDocumentAuditEvent = async (
   );
 };
 
+const updateDocumentVersionScanResult = async (input: {
+  actorRoleCode: string;
+  actorUserId: number;
+  documentId: number;
+  documentVersionId: number;
+  result: DocumentScanResult;
+  sourceModule: string;
+}) => {
+  await withTransaction(getMysqlPool(), async (connection) => {
+    await connection.execute(
+      `UPDATE document_versions
+       SET virus_scan_status_code = ?,
+           scan_provider_code = ?,
+           scan_checked_at = ?,
+           scan_error_text = ?,
+           quarantine_flag = ?
+       WHERE id = ?
+         AND virus_scan_status_code = 'pending_scan'`,
+      [
+        input.result.status,
+        input.result.providerCode,
+        toMysqlDateTime(nowUtc()),
+        input.result.errorText,
+        input.result.status === 'infected' ? 1 : 0,
+        input.documentVersionId,
+      ]
+    );
+
+    await insertDocumentAuditEvent(connection, {
+      actionCode: scanActionCode(input.result.status),
+      actionLabel: `Document scan ${input.result.status.replace(/_/g, ' ')}`,
+      actorRoleCode: input.actorRoleCode,
+      actorUserId: input.actorUserId,
+      entityPk: input.documentId,
+      sourceModule: input.sourceModule,
+      summaryNewValue: `${input.result.providerCode}: ${input.result.status}`,
+    });
+  });
+};
+
+const runClientDocumentBackgroundScan = async (input: {
+  actorUserId: number;
+  documentId: number;
+  documentVersionId: number;
+  sourceModule: string;
+  storageKey: string;
+}) => {
+  let scanResult: DocumentScanResult;
+
+  try {
+    const content = await storageDriver.readBuffer(input.storageKey);
+    scanResult = await scanDocumentContent(content);
+  } catch (error) {
+    scanResult = toScanFailureResult(error);
+    logEvent('error', 'document.background_scan_failed', {
+      documentId: input.documentId,
+      documentVersionId: input.documentVersionId,
+      error: serializeError(error),
+    });
+  }
+
+  try {
+    await updateDocumentVersionScanResult({
+      actorRoleCode: 'client',
+      actorUserId: input.actorUserId,
+      documentId: input.documentId,
+      documentVersionId: input.documentVersionId,
+      result: scanResult,
+      sourceModule: input.sourceModule,
+    });
+  } catch (error) {
+    logEvent('error', 'document.background_scan_update_failed', {
+      documentId: input.documentId,
+      documentVersionId: input.documentVersionId,
+      error: serializeError(error),
+    });
+  }
+};
+
+const scheduleClientDocumentBackgroundScan = (input: {
+  actorUserId: number;
+  documentId: number;
+  documentVersionId: number;
+  sourceModule: string;
+  storageKey: string;
+}) => {
+  void runClientDocumentBackgroundScan(input).catch((error) => {
+    logEvent('error', 'document.background_scan_unhandled_error', {
+      documentId: input.documentId,
+      documentVersionId: input.documentVersionId,
+      error: serializeError(error),
+    });
+  });
+};
+
 const resolveOwnerContext = async (connection: PoolConnection, ownerPublicId: string) =>
   selectOne<RowDataPacket>(
     connection,
@@ -442,11 +560,11 @@ export const documentStorageService = {
     }
 
     await storageDriver.writeBuffer(record.storageKey, content);
-    const scanResult = await scanDocumentContent(content);
+    const initialScanResult = getInitialDocumentScanResult();
 
     const finalizedAt = nowUtc();
 
-    await withTransaction(getMysqlPool(), async (connection) => {
+    const backgroundScan = await withTransaction(getMysqlPool(), async (connection) => {
       const ownerContext = await resolveOwnerContext(connection, ownerAccountId);
 
       if (!ownerContext?.user_id || !ownerContext?.client_account_id) {
@@ -492,11 +610,11 @@ export const documentStorageService = {
           toFileExtension(record.originalName),
           record.sizeBytes,
           record.checksumSha256,
-          scanResult.status,
-          scanResult.providerCode,
-          toMysqlDateTime(finalizedAt),
-          scanResult.errorText,
-          scanResult.status === 'infected' ? 1 : 0,
+          initialScanResult.status,
+          initialScanResult.providerCode,
+          initialScanResult.status === 'pending_scan' ? null : toMysqlDateTime(finalizedAt),
+          initialScanResult.errorText,
+          initialScanResult.status === 'infected' ? 1 : 0,
           Number(ownerContext.user_id),
           toMysqlDateTime(finalizedAt),
           1,
@@ -539,22 +657,26 @@ export const documentStorageService = {
         summaryNewValue: record.originalName,
       });
 
-      await insertDocumentAuditEvent(connection, {
-        actionCode:
-          scanResult.status === 'clean'
-            ? 'document.scan_clean'
-            : scanResult.status === 'infected'
-              ? 'document.scan_infected'
-              : scanResult.status === 'scan_failed'
-                ? 'document.scan_failed'
-                : 'document.scan_skipped',
-        actionLabel: `Document scan ${scanResult.status.replace(/_/g, ' ')}`,
-        actorRoleCode: 'client',
+      if (!shouldRunBackgroundScan(initialScanResult)) {
+        await insertDocumentAuditEvent(connection, {
+          actionCode: scanActionCode(initialScanResult.status),
+          actionLabel: `Document scan ${initialScanResult.status.replace(/_/g, ' ')}`,
+          actorRoleCode: 'client',
+          actorUserId: Number(ownerContext.user_id),
+          entityPk: documentId,
+          sourceModule: record.sourceModule,
+          summaryNewValue: `${initialScanResult.providerCode}: ${initialScanResult.status}`,
+        });
+        return null;
+      }
+
+      return {
         actorUserId: Number(ownerContext.user_id),
-        entityPk: documentId,
+        documentId,
+        documentVersionId,
         sourceModule: record.sourceModule,
-        summaryNewValue: `${scanResult.providerCode}: ${scanResult.status}`,
-      });
+        storageKey: record.storageKey,
+      };
     });
 
     const updatedRecord: StoredUploadRecord = {
@@ -571,6 +693,10 @@ export const documentStorageService = {
       storageKey: updatedRecord.storageKey,
       uploadId: updatedRecord.id,
     });
+
+    if (backgroundScan) {
+      scheduleClientDocumentBackgroundScan(backgroundScan);
+    }
 
     return updatedRecord;
   },

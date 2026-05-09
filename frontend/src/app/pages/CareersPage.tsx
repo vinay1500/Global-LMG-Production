@@ -4,7 +4,8 @@ import { GraduationCap, Briefcase, Users, MapPin, Clock, ArrowRight } from 'luci
 import { useNavigate } from 'react-router';
 import { ImageWithFallback } from '../components/shared/ImageWithFallback';
 import { Seo } from '../components/seo/Seo';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { ExternalFormCta } from '../components/shared/ExternalFormCta';
+import { CAREERS_FORM_LINK } from '../config/launchLinks';
 import {
   CAREER_BENEFITS,
   CAREER_CATEGORIES,
@@ -219,16 +220,14 @@ export const CareersPage = () => {
             {CAREERS_PAGE_CONTENT.ctaBody}
           </p>
           
-          <a
-            href={CLIENT_INTAKE_HREF}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
+          <ExternalFormCta
+            formLink={CAREERS_FORM_LINK}
+            fallbackClassName="mx-auto block max-w-md text-sm leading-relaxed text-gray-300"
             className="px-12 py-5 bg-white text-black text-xs font-bold uppercase tracking-[0.2em] hover:bg-gray-200 transition-colors inline-flex items-center gap-3"
           >
             {CAREERS_PAGE_CONTENT.ctaButtonLabel}
             <ArrowRight size={16} />
-          </a>
+          </ExternalFormCta>
         </div>
       </div>
     </div>

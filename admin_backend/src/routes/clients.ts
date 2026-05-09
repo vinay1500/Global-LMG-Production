@@ -9,7 +9,7 @@ export const clientsRouter = Router();
 
 const createClientSchema = z.object({
   city: z.string().trim().max(100).optional(),
-  clientType: z.enum(['individual', 'organization']).optional(),
+  clientType: z.enum(['individual', 'business', 'organization']).optional(),
   displayName: z.string().trim().min(2).max(200),
   email: z.string().trim().email().max(255),
   notes: z.string().trim().max(2000).optional(),

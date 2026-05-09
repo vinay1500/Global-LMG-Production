@@ -7,7 +7,7 @@ import {
   ArrowUpRight, FileCheck, Landmark, Copy, Printer
 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../data/formatters';
-import type { Invoice, Matter, Payment } from '../data/seedData';
+import type { Invoice, Matter, Payment } from '../data/adminTypes';
 import { StatusBadge } from '../components/dashboard/StatusBadge';
 import { PaginationControls } from '../components/shared/PaginationControls';
 import { adminApi } from '../lib/api/admin';
@@ -1187,7 +1187,7 @@ export const BillingWorkspace: React.FC<{
                 <button
                   className="flex flex-col items-center justify-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition text-gray-700 cursor-not-allowed opacity-60"
                   disabled
-                  title="Invoice share links are not enabled in this build."
+                  title="Share links are unavailable for this invoice."
                   type="button"
                 >
                   <Copy className="w-4 h-4 mb-1.5" />

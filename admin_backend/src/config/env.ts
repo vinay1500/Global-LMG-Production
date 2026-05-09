@@ -7,6 +7,14 @@ if (!rawEnv.MYSQL_SSL_CA && rawEnv.MYSQL_SSL_CA_PATH) {
   rawEnv.MYSQL_SSL_CA = rawEnv.MYSQL_SSL_CA_PATH;
 }
 
+if (!rawEnv.MYSQL_CONNECT_TIMEOUT_MS && rawEnv.MYSQL_CONNECTION_TIMEOUT_MS) {
+  rawEnv.MYSQL_CONNECT_TIMEOUT_MS = rawEnv.MYSQL_CONNECTION_TIMEOUT_MS;
+}
+
+if (!rawEnv.ADMIN_JSON_BODY_LIMIT && rawEnv.JSON_BODY_LIMIT) {
+  rawEnv.ADMIN_JSON_BODY_LIMIT = rawEnv.JSON_BODY_LIMIT;
+}
+
 if (rawEnv.OBJECT_STORAGE_DRIVER) {
   rawEnv.DOCUMENT_STORAGE_DRIVER = rawEnv.OBJECT_STORAGE_DRIVER;
 }
@@ -47,6 +55,14 @@ const booleanFromEnv = z.preprocess((value) => {
 
   return value;
 }, z.boolean());
+
+const bodySizeLimit = z.preprocess((value) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return value.trim().toLowerCase();
+}, z.string().regex(/^\d+(?:\.\d+)?(?:b|kb|mb)$/));
 
 const mysqlSslMode = z.preprocess((value) => {
   if (typeof value !== 'string') {
@@ -131,6 +147,7 @@ const envSchema = z.object({
   FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN: booleanFromEnv.default(false),
   FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN: booleanFromEnv.default(true),
   FILE_SCAN_MODE: fileScanMode.default('disabled'),
+  FILE_SCAN_PENDING_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(5),
   CLAMAV_HOST: optionalString,
   CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
   EMAIL_PROVIDER_MODE: z.enum(['disabled', 'preview', 'resend']).default('disabled'),
@@ -153,20 +170,28 @@ const envSchema = z.object({
   GOOGLE_CALENDAR_SEND_UPDATES: z.enum(['none', 'all', 'externalOnly']).default('none'),
   GOOGLE_CALENDAR_SERVICE_ACCOUNT_EMAIL: optionalString,
   GOOGLE_CALENDAR_SERVICE_ACCOUNT_PRIVATE_KEY: optionalString,
+  MYSQL_CONNECTION_LIMIT: z.coerce.number().int().positive().max(200).default(10),
+  MYSQL_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   MYSQL_DATABASE: optionalString,
   MYSQL_HOST: optionalString,
   MYSQL_PASSWORD: optionalString,
   MYSQL_PORT: z.coerce.number().int().positive().default(3306),
+  MYSQL_QUEUE_LIMIT: z.coerce.number().int().nonnegative().max(10000).default(100),
   MYSQL_SSL_CA: optionalString,
   MYSQL_SSL_MODE: mysqlSslMode.default('DISABLED'),
   MYSQL_USER: optionalString,
+  MYSQL_WAIT_FOR_CONNECTIONS: booleanFromEnv.default(true),
   PORT: z.coerce.number().int().positive().default(3005),
+  ADMIN_JSON_BODY_LIMIT: bodySizeLimit.default('2mb'),
+  PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   PUBLIC_ADMIN_WEB_ORIGIN: z.string().url().default('http://localhost:5174'),
   REQUEST_LOGGING_ENABLED: booleanFromEnv.default(true),
   REMEMBER_ME_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().positive().default(10),
   REMINDER_PROCESS_BATCH_SIZE: z.coerce.number().int().positive().max(100).default(25),
   RESEND_API_KEY: optionalString,
   RESEND_WEBHOOK_SECRET: optionalString,
+  RESEND_WEBHOOK_IP_ALLOWLIST: optionalString,
   SESSION_COOKIE_NAME: z.string().min(1).default('global_lmg_admin_session'),
   SESSION_TTL_HOURS: z.coerce.number().int().positive().default(12),
   SMS_PROVIDER_MODE: smsProviderMode.default('disabled'),
@@ -175,15 +200,33 @@ const envSchema = z.object({
   TWILIO_FROM_NUMBER: optionalString,
   TWILIO_MESSAGING_SERVICE_SID: optionalString,
   TWILIO_WEBHOOK_AUTH_TOKEN: optionalString,
+  TWILIO_WEBHOOK_IP_ALLOWLIST: optionalString,
   TWILIO_VERIFY_SERVICE_SID: optionalString,
   WEBHOOK_PUBLIC_BASE_URL: optionalString,
 });
 
 const parsedEnv = envSchema.parse(rawEnv);
 
+const isPlaceholderLikeSessionSecret = (value: string) =>
+  /(change[-_\s]?this|change[-_\s]?me|development|dev[-_\s]?secret|placeholder|replace[-_\s]?me|example|sample|test[-_\s]?secret|secret[-_\s]?key|password|changeme)/i.test(
+    value
+  ) ||
+  new Set(value.trim()).size < 12 ||
+  /^(.)\1+$/.test(value.trim());
+
 if (parsedEnv.APP_ENV !== 'development') {
   parsedEnv.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN = true;
   parsedEnv.FILE_SCAN_BLOCK_PREVIEW_UNTIL_CLEAN = true;
+}
+
+if (parsedEnv.APP_ENV === 'production') {
+  if (!parsedEnv.PUBLIC_ADMIN_WEB_ORIGIN.startsWith('https://')) {
+    throw new Error('Production PUBLIC_ADMIN_WEB_ORIGIN must use HTTPS.');
+  }
+
+  if (isPlaceholderLikeSessionSecret(parsedEnv.AUTH_SESSION_SECRET)) {
+    throw new Error('Production AUTH_SESSION_SECRET must be a strong non-placeholder secret.');
+  }
 }
 
 if (parsedEnv.EMAIL_PROVIDER_MODE === 'resend') {

@@ -203,7 +203,7 @@ export const RequestsWorkspace: React.FC<RequestsWorkspaceProps> = ({
 
     const handler = getActionHandler(pendingAction.action);
     if (!handler) {
-      setActionError('This action is not available yet.');
+      setActionError('This action is unavailable for this request.');
       return;
     }
 

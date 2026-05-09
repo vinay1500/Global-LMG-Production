@@ -136,13 +136,15 @@ export const CONSULTATION_MODE_SEEDS = [
 ] as const;
 
 export const REQUEST_STATUS_SEEDS = [
-  ['new-lead', 'New Lead', 1, 0],
-  ['awaiting-verification', 'Awaiting Verification', 2, 0],
-  ['consultation-scheduled', 'Consultation Scheduled', 3, 0],
-  ['consultation-completed', 'Consultation Completed', 4, 0],
-  ['fee-pending', 'Fee Pending', 5, 0],
-  ['converted', 'Converted', 6, 1],
-  ['lost-closed', 'Lost / Closed', 7, 1],
+  ['draft_payment_pending', 'Draft Payment Pending', 0, 0],
+  ['submitted', 'Submitted', 1, 0],
+  ['new-lead', 'New Lead', 2, 0],
+  ['awaiting-verification', 'Awaiting Verification', 3, 0],
+  ['consultation-scheduled', 'Consultation Scheduled', 4, 0],
+  ['consultation-completed', 'Consultation Completed', 5, 0],
+  ['fee-pending', 'Fee Pending', 6, 0],
+  ['converted', 'Converted', 7, 1],
+  ['lost-closed', 'Lost / Closed', 8, 1],
 ] as const;
 
 export const MATTER_STAGE_SEEDS = [

@@ -4,6 +4,7 @@ import { AppError, badRequest, notFound } from '../../lib/httpErrors.js';
 import { executeStatement, queryRows, withTransaction, type QueryExecutor } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
 import { createAuditEvent } from '../writeSupport.js';
+import { getPlatformDefaultTimezone } from './platformSettings.js';
 
 export type TeamMemberType = 'external_counsel' | 'field_partner' | 'internal_staff';
 
@@ -346,6 +347,7 @@ export const createTeamMember = async (actor: AdminActor, payload: TeamMemberPay
       const publicId = createPublicId();
       const { firstName, lastName } = splitName(next.name);
       const email = next.email || syntheticStaffEmail(publicId);
+      const timezoneName = await getPlatformDefaultTimezone(connection);
 
       const result = await executeStatement<ResultSetHeader>(
         `INSERT INTO users (
@@ -368,8 +370,8 @@ export const createTeamMember = async (actor: AdminActor, payload: TeamMemberPay
            updated_at,
            archived_at,
            row_version
-         ) VALUES (?, ?, ?, ?, ?, ?, 'admin', 'active', 'Asia/Kolkata', 'en-IN', NULL, 0, NULL, NULL, NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), NULL, 1)`,
-        [publicId, email, next.phone, next.name, firstName, lastName],
+         ) VALUES (?, ?, ?, ?, ?, ?, 'admin', 'active', ?, 'en-US', NULL, 0, NULL, NULL, NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), NULL, 1)`,
+        [publicId, email, next.phone, next.name, firstName, lastName, timezoneName],
         connection
       );
 

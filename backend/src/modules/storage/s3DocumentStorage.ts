@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'node:crypto';
 import path from 'node:path';
+import { providerFetch } from '../../lib/providerHttp.js';
 
 type S3StorageConfig = {
   accessKeyId: string;
@@ -130,7 +131,7 @@ export class S3DocumentStorage {
     const signature = hmacHex(signingKey, stringToSign);
 
     const requestBody = body ? new Blob([new Uint8Array(body)]) : undefined;
-    const response = await fetch(url, {
+    const response = await providerFetch(url, {
       body: requestBody,
       headers: {
         ...headers,
@@ -140,6 +141,10 @@ export class S3DocumentStorage {
         ...(body ? { 'content-type': 'application/octet-stream' } : {}),
       },
       method,
+      operation: `s3_document_${method.toLowerCase()}`,
+      providerCode: 's3',
+      retryDelayMs: 250,
+      safeToRetry: method === 'GET',
     });
 
     if (!response.ok) {

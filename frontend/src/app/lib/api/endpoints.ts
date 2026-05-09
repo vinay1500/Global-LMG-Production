@@ -14,6 +14,7 @@ export const API_ENDPOINTS = {
     session: () => joinApiPath('/v1/auth/session'),
     signIn: () => joinApiPath('/v1/auth/sign-in'),
     signUp: () => joinApiPath('/v1/auth/sign-up'),
+    googleNonce: () => joinApiPath('/v1/auth/google/nonce'),
     google: () => joinApiPath('/v1/auth/google'),
     verifyEmail: () => joinApiPath('/v1/auth/verify-email'),
     submitGooglePhone: () => joinApiPath('/v1/auth/google/phone'),
@@ -29,6 +30,8 @@ export const API_ENDPOINTS = {
     snapshot: () => joinApiPath('/v1/dashboard'),
     requestConfig: () => joinApiPath('/v1/dashboard/request-config'),
     requests: () => joinApiPath('/v1/dashboard/requests'),
+    requestPaymentVerify: (requestId: string) =>
+      joinApiPath(`/v1/dashboard/requests/${requestId}/payment-verify`),
     messages: () => joinApiPath('/v1/dashboard/messages'),
     messageRead: (threadId: string) => joinApiPath(`/v1/dashboard/messages/${threadId}/read`),
     matterPackageSelection: (matterId: string) =>

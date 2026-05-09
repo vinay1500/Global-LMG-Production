@@ -3,7 +3,8 @@ import { motion } from 'motion/react';
 import { Heart, Scale, Users, Globe, ArrowRight, Award } from 'lucide-react';
 import { ImageWithFallback } from '../components/shared/ImageWithFallback';
 import { Seo } from '../components/seo/Seo';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { ExternalFormCta } from '../components/shared/ExternalFormCta';
+import { CONTACT_FORM_LINK, PARTNER_FORM_LINK } from '../config/launchLinks';
 import { PRO_BONO_EMAIL } from '../config/brand';
 import {
   PRO_BONO_CASE_STUDIES,
@@ -212,25 +213,21 @@ export const ProBono = () => {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               
               
-              <a
-                href={CLIENT_INTAKE_HREF}
-                target="_blank"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
+              <ExternalFormCta
+                formLink={PARTNER_FORM_LINK}
+                fallbackClassName="max-w-sm text-sm leading-relaxed text-gray-500"
                 className="px-12 py-5 bg-black text-white text-xs font-bold uppercase tracking-[0.2em] hover:bg-gray-800 transition-colors inline-flex items-center justify-center gap-3 rounded-full"
               >
                 Apply for Pro Bono Support
                 <ArrowRight size={16} />
-              </a>
-              <a
-                href={CLIENT_INTAKE_HREF}
-                target="_blank"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
+              </ExternalFormCta>
+              <ExternalFormCta
+                formLink={CONTACT_FORM_LINK}
+                fallbackClassName="max-w-sm text-sm leading-relaxed text-gray-500"
                 className="px-12 py-5 border-2 border-black text-black text-xs font-bold uppercase tracking-[0.2em] hover:bg-black hover:text-white transition-colors inline-flex items-center justify-center gap-3 rounded-full"
               >
                 Contact Our Team
-              </a>
+              </ExternalFormCta>
             </div>
             <p className="mt-8 text-sm text-gray-500">Email: {PRO_BONO_EMAIL}</p>
           </div>

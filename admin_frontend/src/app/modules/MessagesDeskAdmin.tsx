@@ -14,7 +14,7 @@ import type {
   MessageThread,
   PlatformEvent,
   PlatformUser,
-} from '../data/seedData';
+} from '../data/adminTypes';
 import type { AdminTemplate } from '../lib/api/contracts';
 import { StatusBadge, UrgencyDot } from '../components/dashboard/StatusBadge';
 import { EmptyState } from './EmptyState';
@@ -213,7 +213,7 @@ export const MessagesDeskAdmin: React.FC<MessagesDeskAdminProps> = ({
   const groupedMessages = useMemo(() => {
     const groups: { [date: string]: ChatMessage[] } = {};
     threadMessages.forEach(msg => {
-      const date = new Date(msg.timestamp).toLocaleDateString('en-IN', {
+      const date = new Date(msg.timestamp).toLocaleDateString(undefined, {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
       });
       if (!groups[date]) groups[date] = [];
@@ -406,7 +406,7 @@ export const MessagesDeskAdmin: React.FC<MessagesDeskAdminProps> = ({
                   </h3>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[10px] text-gray-400 whitespace-nowrap">
-                      {new Date(thread.lastMessageAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
+                      {new Date(thread.lastMessageAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                     </span>
                     {thread.unreadCount > 0 && (
                       <span className="flex items-center justify-center w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full">
@@ -526,7 +526,7 @@ export const MessagesDeskAdmin: React.FC<MessagesDeskAdminProps> = ({
                               <ShieldAlert className="w-3.5 h-3.5" />
                               {msg.content}
                               <span className="text-gray-400 ml-2">
-                                {new Date(msg.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                {new Date(msg.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             </div>
                           </div>
@@ -544,7 +544,7 @@ export const MessagesDeskAdmin: React.FC<MessagesDeskAdminProps> = ({
                             
                             <div className={`flex min-w-0 flex-col ${isClient ? 'items-start' : 'items-end'}`}>
                               <span className="text-[11px] text-gray-500 mb-1 px-1 font-medium">
-                                {msg.senderName} <span className="font-normal opacity-70 ml-1">{new Date(msg.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
+                                {msg.senderName} <span className="font-normal opacity-70 ml-1">{new Date(msg.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
                               </span>
                               
                               <div className={`max-w-full p-3.5 rounded-2xl text-sm shadow-sm admin-wrap-anywhere ${
@@ -775,7 +775,7 @@ export const MessagesDeskAdmin: React.FC<MessagesDeskAdminProps> = ({
                     >
                       <div className="flex flex-col items-center justify-center w-10 h-10 bg-amber-50 rounded-lg border border-amber-100 shrink-0">
                         <span className="text-[10px] font-bold text-amber-600 uppercase leading-none mb-0.5">
-                          {new Date(event.date).toLocaleDateString('en-IN', { month: 'short' })}
+                          {new Date(event.date).toLocaleDateString(undefined, { month: 'short' })}
                         </span>
                         <span className="text-sm font-bold text-gray-900 leading-none">
                           {new Date(event.date).getDate()}

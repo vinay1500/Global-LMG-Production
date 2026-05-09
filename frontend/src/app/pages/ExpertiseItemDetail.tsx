@@ -2,8 +2,9 @@ import React from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { Seo } from '../components/seo/Seo';
+import { ExternalFormCta } from '../components/shared/ExternalFormCta';
 import { SafeRichText } from '../components/shared/SafeRichText';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { CLIENT_INTAKE_FORM_LINK } from '../config/launchLinks';
 import {
   getExpertiseCategoryById,
   getExpertiseItemById,
@@ -91,15 +92,13 @@ export const ExpertiseItemDetail = () => {
 
         <div className="mt-16 pt-8 border-t border-gray-200">
           
-          <a
-            href={CLIENT_INTAKE_HREF}
-            target="_blank"
-            rel="noopener noreferrer"
-            referrerPolicy="no-referrer"
+          <ExternalFormCta
+            formLink={CLIENT_INTAKE_FORM_LINK}
+            fallbackClassName="block max-w-md text-sm leading-relaxed text-gray-500"
             className="inline-flex px-10 py-5 bg-black text-white text-xs font-bold uppercase tracking-[0.2em] hover:bg-gray-800 transition-colors"
           >
             Schedule a Consultation
-          </a>
+          </ExternalFormCta>
         </div>
       </article>
     </div>

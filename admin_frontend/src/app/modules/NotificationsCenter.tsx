@@ -5,7 +5,7 @@ import {
   AlertCircle, Loader2, RotateCcw, X, Users
 } from 'lucide-react';
 import { formatDate } from '../data/formatters';
-import type { SystemNotification } from '../data/seedData';
+import type { SystemNotification } from '../data/adminTypes';
 import type { ReminderWorkspaceResponse } from '../lib/api/contracts';
 import { EmptyState } from './EmptyState';
 

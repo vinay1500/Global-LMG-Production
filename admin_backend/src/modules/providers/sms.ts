@@ -1,4 +1,5 @@
 import { env } from '../../config/env.js';
+import { providerFetch } from '../../lib/providerHttp.js';
 import type { ProviderDeliveryResult, SendSmsInput } from './types.js';
 
 const truncate = (value: string, maxLength = 255) =>
@@ -53,16 +54,19 @@ export const sendSms = async (input: SendSmsInput): Promise<ProviderDeliveryResu
   }
 
   try {
-    const response = await fetch(
+    const response = await providerFetch(
       `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(
         env.TWILIO_ACCOUNT_SID
       )}/Messages.json`,
       {
         method: 'POST',
+        operation: 'send_sms',
+        providerCode: 'twilio',
         headers: {
           Authorization: buildAuthHeader(),
           'Content-Type': 'application/x-www-form-urlencoded',
         },
+        safeToRetry: false,
         body,
       }
     );

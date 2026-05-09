@@ -15,7 +15,7 @@ import {
   Search,
   Upload,
 } from 'lucide-react';
-import type { Matter, PlatformDocument } from '../data/seedData';
+import type { Matter, PlatformDocument } from '../data/adminTypes';
 import type { AdminDocumentDetailResponse, SettingsDocumentType } from '../lib/api/contracts';
 import { EmptyState } from './EmptyState';
 
@@ -94,7 +94,7 @@ const formatSize = (bytes: number) => {
 
 const formatDate = (dateStr: string) => {
   if (!dateStr) return '';
-  return new Date(dateStr).toLocaleDateString('en-IN', {
+  return new Date(dateStr).toLocaleDateString(undefined, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

@@ -19,6 +19,7 @@ import {
 } from '../shared.js';
 import { createAuditEvent } from '../writeSupport.js';
 import { mapLifecycle, toUiDate, toUiDateTime } from '../../lib/viewModels.js';
+import { getPlatformDefaultTimezone } from '../settings/platformSettings.js';
 
 type ClientRow = RowDataPacket & {
   accountStatusCode: string;
@@ -224,6 +225,7 @@ const fetchClientRequests = async (clientAccountId: string) => {
      LEFT JOIN services ON services.id = req_services.service_id
      WHERE sr.archived_at IS NULL
        AND ca.public_id = ?
+       AND sr.status_code <> 'draft_payment_pending'
      GROUP BY
        sr.id,
        sr.public_id,
@@ -428,7 +430,7 @@ export const createClient = async (
   actor: AdminActor,
   payload: {
     city?: string;
-    clientType?: 'individual' | 'organization';
+    clientType?: 'business' | 'individual' | 'organization';
     displayName: string;
     email: string;
     notes?: string;
@@ -508,6 +510,7 @@ export const createClient = async (
     let userId = existingUser?.id || null;
     if (!userId) {
       const { firstName, lastName } = splitName(primaryContactName);
+      const timezoneName = await getPlatformDefaultTimezone(connection);
       const userResult = await executeStatement<ResultSetHeader>(
         `INSERT INTO users (
            public_id,
@@ -527,7 +530,7 @@ export const createClient = async (
            phone_verified_at,
            created_at,
            updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'client', 'active', 'Asia/Kolkata', 'en-IN', '', ?, NULL, NULL, NULL, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, 'client', 'active', ?, 'en-US', '', ?, NULL, NULL, NULL, ?, ?)`,
         [
           createPublicId(),
           normalizedEmail,
@@ -535,6 +538,7 @@ export const createClient = async (
           primaryContactName,
           firstName,
           lastName,
+          timezoneName,
           portalAccessEnabled ? 1 : 0,
           timestamp,
           timestamp,

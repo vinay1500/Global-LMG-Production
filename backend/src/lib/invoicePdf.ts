@@ -1,6 +1,5 @@
 import type { RowDataPacket } from 'mysql2/promise';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
-import { formatCurrencyAmount } from './currencyFormat.js';
 import { getMysqlPool } from './mysql.js';
 import { selectOne, withConnection } from './mysqlUtils.js';
 import type { InvoiceDetail } from '../modules/domain/types.js';
@@ -30,11 +29,20 @@ const DEFAULT_MARGINS = {
   top: 120,
 };
 
-const formatMoney = (amount: number, currencyCode: string) =>
-  formatCurrencyAmount(amount, currencyCode);
+const formatMoney = (amount: number, currencyCode: string) => {
+  const normalizedCurrency = /^[A-Z]{3}$/.test(String(currencyCode || '').trim().toUpperCase())
+    ? String(currencyCode || '').trim().toUpperCase()
+    : 'USD';
+  const formattedAmount = Number(amount || 0).toLocaleString('en-US', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
+
+  return `${normalizedCurrency} ${formattedAmount}`;
+};
 
 const formatDate = (value: string) =>
-  new Intl.DateTimeFormat('en-IN', {
+  new Intl.DateTimeFormat('en-US', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',

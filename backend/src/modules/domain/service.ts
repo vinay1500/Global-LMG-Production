@@ -68,4 +68,9 @@ export const domainService = {
     const repository = await getRepository();
     return repository.listClientRefunds(clientAccountId);
   },
+
+  async assertCurrentClientAccountAccess(userPublicId: string, clientAccountId: number) {
+    const repository = await getRepository();
+    return repository.assertCurrentClientAccountAccess(userPublicId, clientAccountId);
+  },
 };

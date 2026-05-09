@@ -3,6 +3,7 @@ import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { addDaysUtc, fromMysqlDateTime, nowUtc, toMysqlDateTime } from '../../lib/datetime.js';
 import { createPublicId } from '../../lib/ids.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/httpErrors.js';
+import { sanitizeMessageContent } from '../../lib/messageContent.js';
 import { selectAll, selectOne, withConnection, withTransaction } from '../../lib/mysqlUtils.js';
 import { getRequestContext } from '../../lib/observability.js';
 import { env } from '../../config/env.js';
@@ -11,7 +12,6 @@ import { domainEventService } from '../domainEvents/service.js';
 import { allocateBusinessNumber } from '../platform/sequences.js';
 import {
   convertBaseAmount,
-  exactOverrideAmount,
   normalizeCurrencyCode,
   summarizeFxSnapshots,
   type PricingFxSnapshot,
@@ -225,17 +225,13 @@ export const buildPriceOverrideMap = (rows: CountryPriceOverrideRow[]) => {
 };
 
 export const resolveFlatPrice = (
-  overrides: Map<string, CountryPriceOverrideRow>,
-  subjectType: PriceOverrideSubjectType,
-  subjectCode: string,
+  _overrides: Map<string, CountryPriceOverrideRow>,
+  _subjectType: PriceOverrideSubjectType,
+  _subjectCode: string,
   defaultAmount: number,
-  multiplier: number
+  _multiplier: number
 ) => {
-  const override = overrides.get(priceOverrideKey(subjectType, subjectCode));
-  if (override) {
-    return toMoney(toAmount(override.price_amount));
-  }
-  return toMoney(defaultAmount * multiplier);
+  return toMoney(defaultAmount);
 };
 
 const pricingRuleSourceCode = (snapshot: PricingFxSnapshot) => {
@@ -565,13 +561,67 @@ interface MessageRow extends RowDataPacket {
 interface AttachmentUploadRow extends RowDataPacket {
   document_id: number | null;
   document_version_id: number | null;
+  expires_at: string | Date | null;
   invoice_public_id: string | null;
+  is_attached_to_request: number | string | null;
   matter_public_id: string | null;
   public_id: string;
+  resolved_document_id: number | null;
+  resolved_document_version_id: number | null;
   request_public_id: string | null;
   status_code: string;
   thread_public_id: string | null;
 }
+
+export const validateRequestDocumentUploadRows = (
+  rows: AttachmentUploadRow[],
+  expectedUploadCount: number,
+  now: Date = new Date()
+) => {
+  if (rows.length !== expectedUploadCount) {
+    throw forbidden(
+      'request_document_forbidden',
+      'One or more uploaded documents are not available for this request.'
+    );
+  }
+
+  for (const upload of rows) {
+    const expiresAt = fromMysqlDateTime(upload.expires_at);
+    const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime()) {
+      throw conflict(
+        'request_document_expired',
+        'One or more uploaded documents are no longer available. Please upload them again.'
+      );
+    }
+
+    if (
+      upload.status_code !== 'stored' ||
+      !upload.document_id ||
+      !upload.document_version_id ||
+      !upload.resolved_document_id ||
+      !upload.resolved_document_version_id
+    ) {
+      throw conflict(
+        'request_document_not_ready',
+        'One or more uploaded documents are not ready to be attached yet.'
+      );
+    }
+
+    if (
+      upload.request_public_id ||
+      upload.matter_public_id ||
+      upload.invoice_public_id ||
+      upload.thread_public_id ||
+      Number(upload.is_attached_to_request || 0) > 0
+    ) {
+      throw conflict(
+        'request_document_already_linked',
+        'One or more uploaded documents are already linked to another record.'
+      );
+    }
+  }
+};
 
 interface LeadRow extends RowDataPacket {
   contact_name_snapshot: string;
@@ -642,11 +692,11 @@ const toTimeLabel = (value: string | Date | null | undefined) => {
     return '';
   }
 
-  return new Intl.DateTimeFormat('en-IN', {
+  return new Intl.DateTimeFormat('en-US', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
-    timeZone: 'Asia/Kolkata',
+    timeZone: 'UTC',
   }).format(new Date(iso));
 };
 
@@ -1015,22 +1065,35 @@ export class NormalizedDashboardRepository {
       targetCurrencyCode: string;
     }
   ) {
-    const override = options.overrides.get(priceOverrideKey(options.subjectType, options.subjectCode));
-    const targetCurrencyCode = normalizeCurrencyCode(options.targetCurrencyCode);
+    return convertBaseAmount(connection, toAmount(options.defaultAmount), options.targetCurrencyCode);
+  }
 
-    if (override) {
-      const overrideCurrencyCode = normalizeCurrencyCode(override.currency_code);
-      if (overrideCurrencyCode !== targetCurrencyCode) {
-        throw conflict(
-          'pricing_currency_mismatch',
-          `The ${override.country_code} price override for ${options.subjectCode} is in ${overrideCurrencyCode}, but the country pricing currency is ${targetCurrencyCode}.`
-        );
-      }
+  private async shouldShowApproximateLocalCurrency(connection: PoolConnection) {
+    const row = await selectOne<RowDataPacket & { settingValueJson: unknown }>(
+      connection,
+      `SELECT setting_value_json AS settingValueJson
+       FROM platform_settings
+       WHERE setting_key = 'pricing.show_approximate_local_currency'
+       LIMIT 1`
+    );
 
-      return exactOverrideAmount(toAmount(override.price_amount), targetCurrencyCode);
+    if (!row) {
+      return true;
     }
 
-    return convertBaseAmount(connection, toAmount(options.defaultAmount), targetCurrencyCode);
+    try {
+      const parsed =
+        typeof row.settingValueJson === 'string'
+          ? JSON.parse(row.settingValueJson)
+          : row.settingValueJson;
+      const value =
+        parsed && typeof parsed === 'object' && 'value' in parsed
+          ? (parsed as { value: unknown }).value
+          : null;
+      return typeof value === 'boolean' ? value : true;
+    } catch {
+      return true;
+    }
   }
 
   private async getRequestPricingReferenceRows(connection: PoolConnection): Promise<RequestPricingReferenceRows> {
@@ -1120,14 +1183,14 @@ export class NormalizedDashboardRepository {
       const countryPricing = await this.getCountryPricing(connection, countryResolution.countryCode);
       const requestedCountryCode = normalizeCountryCode(countryResolution.countryCode);
       const targetCurrencyCode = ACTIVE_PRICING_CURRENCY_CODE;
-      const priceOverrideRows = await this.getCountryPriceOverrides(connection, countryPricing.country_code, targetCurrencyCode);
-      const priceOverrides = buildPriceOverrideMap(priceOverrideRows);
+      const priceOverrides = new Map<string, CountryPriceOverrideRow>();
       const displayCountryCode = countryPricing.country_code;
       const displayCountryName = countryPricing.country_name;
       const isDefaultFallback =
         countryResolution.source === 'default' ||
         !requestedCountryCode ||
-        (priceOverrideRows.length === 0 && countryPricing.country_code !== requestedCountryCode);
+        countryPricing.country_code !== requestedCountryCode;
+      const showApproximateLocalCurrency = await this.shouldShowApproximateLocalCurrency(connection);
 
       const { consultationRows, legalDomainRows, serviceRows, urgencyRows } =
         await this.getRequestPricingReferenceRows(connection);
@@ -1170,7 +1233,6 @@ export class NormalizedDashboardRepository {
         urgencyRows.map(async (row) => {
           const responseWindowHours =
             row.response_window_hours === null ? null : Number(row.response_window_hours);
-          const hasExactOverride = priceOverrides.has(priceOverrideKey('urgency', row.urgency_code));
           const flatSurcharge = await this.resolvePricingAmountSnapshot(connection, {
             defaultAmount: toAmount(row.surcharge_value),
             overrides: priceOverrides,
@@ -1192,11 +1254,11 @@ export class NormalizedDashboardRepository {
             responseWindowHours,
             timingLabel: formatUrgencyTiming(row),
             surcharge:
-              row.surcharge_type_code === 'percent' && !hasExactOverride
+              row.surcharge_type_code === 'percent'
                 ? toAmount(row.surcharge_value)
                 : flatSurcharge.amount,
             surchargeType:
-              row.surcharge_type_code === 'percent' && !hasExactOverride
+              row.surcharge_type_code === 'percent'
                 ? 'percent' as const
                 : 'flat' as const,
           };
@@ -1222,6 +1284,7 @@ export class NormalizedDashboardRepository {
           id: row.code,
           name: row.name,
         })),
+        showApproximateLocalCurrency,
         services,
         urgencyOptions,
       };
@@ -1236,7 +1299,7 @@ export class NormalizedDashboardRepository {
   public async submitRequest(currentClient: PlatformUser, request: DashboardRequestInput) {
     await this.initialize();
 
-    await withTransaction(this.pool, async (connection) => {
+    return withTransaction(this.pool, async (connection) => {
       const context = await this.resolveClientContext(connection, currentClient.id);
       const currentUserRow = await selectOne<RowDataPacket>(
         connection,
@@ -1327,8 +1390,7 @@ export class NormalizedDashboardRepository {
       });
       const countryPricing = await this.getCountryPricing(connection, countryResolution.countryCode);
       const targetCurrencyCode = ACTIVE_PRICING_CURRENCY_CODE;
-      const priceOverrideRows = await this.getCountryPriceOverrides(connection, countryPricing.country_code, targetCurrencyCode);
-      const priceOverrides = buildPriceOverrideMap(priceOverrideRows);
+      const priceOverrides = new Map<string, CountryPriceOverrideRow>();
       const currencyCode = targetCurrencyCode;
       const quoteCountryCode = countryPricing.country_code;
       const serviceLineSnapshots = await Promise.all(
@@ -1351,7 +1413,7 @@ export class NormalizedDashboardRepository {
         targetCurrencyCode,
       });
       const consultationSurcharge = consultationSnapshot.amount;
-      const urgencyHasExactOverride = priceOverrides.has(priceOverrideKey('urgency', urgencyRuleRow.urgency_code));
+      const urgencyHasExactOverride = false;
       const urgencyFlatSnapshot = await this.resolvePricingAmountSnapshot(connection, {
         defaultAmount: toAmount(urgencyRuleRow.surcharge_value),
         overrides: priceOverrides,
@@ -1403,11 +1465,7 @@ export class NormalizedDashboardRepository {
         : null;
 
       const requestNumber = await allocateBusinessNumber(connection, 'service_request', 'REQ');
-      const matterNumber = await allocateBusinessNumber(connection, 'matter', 'GLMG');
-      const threadNumber = await allocateBusinessNumber(connection, 'thread', 'THR');
       const serviceRequestPublicId = createPublicId();
-      const matterPublicId = createPublicId();
-      const threadPublicId = createPublicId();
       const documentTimestamp = toMysqlDateTime(nowUtc());
       const title = `${String(legalDomainRow.domain_name)} Request`;
       const summary = request.caseDetails.trim().slice(0, 500);
@@ -1448,45 +1506,30 @@ export class NormalizedDashboardRepository {
              dui.thread_public_id,
              dui.document_id,
              dui.document_version_id,
-             dui.status_code
+             dui.status_code,
+             dui.expires_at,
+             d.id AS resolved_document_id,
+             dv.id AS resolved_document_version_id,
+             EXISTS (
+               SELECT 1
+                 FROM request_documents rd
+                WHERE rd.document_id = dui.document_id
+             ) AS is_attached_to_request
            FROM document_upload_intents dui
+           LEFT JOIN documents d
+             ON d.id = dui.document_id
+            AND d.owner_client_account_id = ?
+            AND d.archived_at IS NULL
+           LEFT JOIN document_versions dv
+             ON dv.id = dui.document_version_id
+            AND dv.document_id = dui.document_id
            WHERE dui.public_id IN (${placeholders})
              AND dui.owner_user_id = ?
              AND dui.owner_client_account_id = ?`,
-          [...uniqueDocumentUploadIds, currentUserId, context.clientAccountId]
+          [context.clientAccountId, ...uniqueDocumentUploadIds, currentUserId, context.clientAccountId]
         );
 
-        if (requestUploadRows.length !== uniqueDocumentUploadIds.length) {
-          throw forbidden(
-            'request_document_forbidden',
-            'One or more uploaded documents are not available for this request.'
-          );
-        }
-
-        for (const upload of requestUploadRows) {
-          if (
-            !upload.document_id ||
-            !upload.document_version_id ||
-            !['stored', 'attached'].includes(upload.status_code)
-          ) {
-            throw conflict(
-              'request_document_not_ready',
-              'One or more uploaded documents are not ready to be attached yet.'
-            );
-          }
-
-          if (
-            upload.request_public_id ||
-            upload.matter_public_id ||
-            upload.invoice_public_id ||
-            upload.thread_public_id
-          ) {
-            throw conflict(
-              'request_document_already_linked',
-              'One or more uploaded documents are already linked to another record.'
-            );
-          }
-        }
+        validateRequestDocumentUploadRows(requestUploadRows, uniqueDocumentUploadIds.length);
       }
 
       const [requestInsert] = await connection.execute(
@@ -1505,7 +1548,7 @@ export class NormalizedDashboardRepository {
           requestNumber,
           context.clientAccountId,
           currentUserId,
-          'new-lead',
+          'draft_payment_pending',
           title,
           summary,
           request.caseDetails.trim(),
@@ -1528,7 +1571,7 @@ export class NormalizedDashboardRepository {
           countryResolution.source,
           request.pastLegalAction ? 1 : 0,
           quotedAmount,
-          createdAt,
+          null,
           createdAt,
           createdAt,
         ]
@@ -1595,8 +1638,8 @@ export class NormalizedDashboardRepository {
           quoteCountryCode,
           countryResolution.source,
           countryPricing.id || null,
-          1,
-          createdAt,
+          0,
+          null,
           ownerUserId,
           createdAt,
         ]
@@ -1665,224 +1708,8 @@ export class NormalizedDashboardRepository {
         `INSERT INTO request_status_history (
           service_request_id, from_status_code, to_status_code, changed_by_user_id, change_note, changed_at
         ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [serviceRequestId, null, 'new-lead', currentUserId, 'Client request submitted from dashboard.', createdAt]
+        [serviceRequestId, null, 'draft_payment_pending', currentUserId, 'Client request draft created pending payment.', createdAt]
       );
-
-      const [matterInsert] = await connection.execute(
-        `INSERT INTO matters (
-          public_id, matter_number, service_request_id, client_account_id, opened_by_user_id, legal_domain_id,
-          title, issue_summary, detailed_description, current_stage_code, operational_status_code,
-          consultation_mode_code, urgency_rule_id, priority_code, quoted_total_amount, paid_total_amount,
-          refunded_total_amount, due_total_amount, opened_at, last_activity_at, closed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          matterPublicId,
-          matterNumber,
-          serviceRequestId,
-          context.clientAccountId,
-          currentUserId,
-          Number(legalDomainRow.id),
-          title,
-          summary,
-          request.caseDetails.trim(),
-          'request-received',
-          'new-lead',
-          request.consultationMode,
-          Number(urgencyRuleRow.id),
-          request.urgency === 'standard' ? 'in-progress' : 'immediate-6h',
-          quotedAmount,
-          0,
-          0,
-          quotedAmount,
-          createdAt,
-          createdAt,
-          null,
-          createdAt,
-          createdAt,
-        ]
-      );
-      const matterId = Number((matterInsert as { insertId: number }).insertId);
-
-      for (const [index, serviceRow] of orderedServiceRows.entries()) {
-        await connection.execute(
-          `INSERT INTO matter_services (
-            matter_id, service_id, final_fee, service_status_code, completed_at, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
-          [matterId, Number(serviceRow.id), serviceLineAmounts[index] || 0, 'selected', null, createdAt]
-        );
-      }
-
-      await connection.execute(
-        `INSERT INTO matter_stage_history (
-          matter_id, stage_code, entered_at, exited_at, changed_by_user_id, visible_to_client, change_note
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [matterId, 'request-received', createdAt, null, currentUserId, 1, 'Matter created from client request.']
-      );
-
-      await connection.execute(
-        `INSERT INTO matter_updates (
-          matter_id, update_type_code, title, body_text, visible_to_client, created_by_user_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          matterId,
-          'note',
-          'Request Submitted',
-          'Your request has been submitted. Our intake team is reviewing the details.',
-          1,
-          ownerUserId,
-          createdAt,
-        ]
-      );
-
-      await connection.execute(
-        `INSERT INTO matter_updates (
-          matter_id, update_type_code, title, body_text, visible_to_client, created_by_user_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          matterId,
-          'note',
-          'Internal Intake Note',
-          request.pastLegalAction
-            ? 'Client reported prior legal action in the intake flow.'
-            : 'Client reported no prior legal action.',
-          0,
-          ownerUserId,
-          createdAt,
-        ]
-      );
-
-      await connection.execute(
-        `INSERT INTO matter_assignments (
-          matter_id, assignment_role_code, internal_user_id, counsel_partner_id, is_primary,
-          fee_agreed_amount, fee_paid_amount, fee_due_amount, assigned_by_user_id, assigned_at,
-          removed_at, assignment_status_code, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [matterId, 'case_manager', ownerUserId, null, 1, null, null, null, ownerUserId, createdAt, null, 'active', 'Auto-assigned account owner for intake.']
-      );
-
-      const [threadInsert] = await connection.execute(
-        `INSERT INTO conversation_threads (
-          public_id, thread_number, thread_type_code, client_account_id, matter_id, subject, status_code,
-          created_by_user_id, assigned_owner_user_id, last_message_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          threadPublicId,
-          threadNumber,
-          'matter',
-          context.clientAccountId,
-          matterId,
-          title,
-          'active',
-          currentUserId,
-          internalOwnerUserId,
-          createdAt,
-          createdAt,
-          createdAt,
-        ]
-      );
-      const threadId = Number((threadInsert as { insertId: number }).insertId);
-
-      await connection.execute(
-        `INSERT INTO thread_participants (
-          thread_id, participant_role_code, internal_user_id, client_contact_user_id, counsel_partner_id,
-          is_active, joined_at, left_at, last_read_message_id, last_read_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [threadId, 'client', null, currentUserId, null, 1, createdAt, null, null, null]
-      );
-      if (internalOwnerUserId) {
-        await connection.execute(
-          `INSERT INTO thread_participants (
-            thread_id, participant_role_code, internal_user_id, client_contact_user_id, counsel_partner_id,
-            is_active, joined_at, left_at, last_read_message_id, last_read_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [threadId, 'staff', internalOwnerUserId, null, null, 1, createdAt, null, null, null]
-        );
-      }
-
-      const systemMessage = await connection.execute(
-        `INSERT INTO messages (
-          public_id, thread_id, sender_user_id, sender_counsel_partner_id, sender_system_code,
-          message_type_code, body_text, visible_to_client, reply_to_message_id, sent_at, edited_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          createPublicId(),
-          threadId,
-          null,
-          null,
-          'system',
-          'system',
-          `New request created: ${title}`,
-          1,
-          null,
-          createdAt,
-          null,
-          null,
-        ]
-      );
-
-      const systemMessageId = Number((systemMessage[0] as { insertId: number }).insertId);
-      await connection.execute(
-        `INSERT INTO message_reads (
-          message_id, user_id, read_at
-        ) VALUES (?, ?, ?)`,
-        [systemMessageId, currentUserId, createdAt]
-      );
-
-      await connection.execute(
-        `INSERT INTO messages (
-          public_id, thread_id, sender_user_id, sender_counsel_partner_id, sender_system_code,
-          message_type_code, body_text, visible_to_client, reply_to_message_id, sent_at, edited_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          createPublicId(),
-          threadId,
-          internalOwnerUserId,
-          null,
-          internalOwnerUserId ? null : 'global_lmg',
-          'text',
-          AUTOMATIC_REQUEST_ACKNOWLEDGEMENT,
-          1,
-          null,
-          createdAt,
-          null,
-          null,
-        ]
-      );
-
-      if (preferredWindow.start && preferredWindow.end) {
-        await connection.execute(
-          `INSERT INTO events (
-            public_id, client_account_id, matter_id, title, event_type_code, status_code,
-            scheduled_start_at, scheduled_end_at, timezone_name, mode_code, location_text,
-            meeting_provider_code, external_meeting_id, join_url, host_url, client_visible_flag,
-            notes, created_by_user_id, cancelled_by_user_id, created_at, updated_at, cancelled_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            createPublicId(),
-            context.clientAccountId,
-            matterId,
-            `${String(legalDomainRow.domain_name)} Intake Consultation`,
-            'consultation',
-            'upcoming',
-            toMysqlDateTime(preferredWindow.start),
-            toMysqlDateTime(preferredWindow.end),
-            preferredWindow.timeZone || 'UTC',
-            request.consultationMode,
-            request.consultationMode === 'in-person' ? 'Global LMG office visit to be confirmed' : null,
-            request.consultationMode === 'video' ? 'google-meet' : request.consultationMode,
-            null,
-            null,
-            null,
-            1,
-            'Preferred consultation slot requested from dashboard intake.',
-            ownerUserId,
-            null,
-            createdAt,
-            createdAt,
-            null,
-          ]
-        );
-      }
 
       if (requestUploadRows.length > 0) {
         for (const upload of requestUploadRows) {
@@ -1892,22 +1719,15 @@ export class NormalizedDashboardRepository {
             ) VALUES (?, ?, ?, ?)`,
             [serviceRequestId, Number(upload.document_id), 'intake', documentTimestamp]
           );
-          await connection.execute(
-            `INSERT INTO matter_documents (
-              matter_id, document_id, link_role_code, created_at
-            ) VALUES (?, ?, ?, ?)`,
-            [matterId, Number(upload.document_id), 'client', documentTimestamp]
-          );
         }
 
         const placeholders = requestUploadRows.map(() => '?').join(', ');
         await connection.execute(
           `UPDATE document_upload_intents
            SET status_code = 'attached',
-               request_public_id = ?,
-               matter_public_id = ?
+               request_public_id = ?
            WHERE public_id IN (${placeholders})`,
-          [serviceRequestPublicId, matterPublicId, ...requestUploadRows.map((upload) => upload.public_id)]
+          [serviceRequestPublicId, ...requestUploadRows.map((upload) => upload.public_id)]
         );
       } else {
         for (const document of request.documents) {
@@ -1967,26 +1787,15 @@ export class NormalizedDashboardRepository {
             ) VALUES (?, ?, ?, ?)`,
             [serviceRequestId, documentId, 'intake', documentTimestamp]
           );
-          await connection.execute(
-            `INSERT INTO matter_documents (
-              matter_id, document_id, link_role_code, created_at
-            ) VALUES (?, ?, ?, ?)`,
-            [matterId, documentId, 'client', documentTimestamp]
-          );
         }
       }
 
-      await domainEventService.publishRequestSubmitted(connection, {
+      return {
         actorUserId: currentUserId,
         clientAccountId: context.clientAccountId,
-        matterId,
-        matterNumber,
-        threadId,
-        title,
-      });
+        requestId: serviceRequestPublicId,
+      };
     });
-
-    return this.getSnapshot(currentClient);
   }
 
   public async selectMatterPackage(
@@ -2200,10 +2009,10 @@ export class NormalizedDashboardRepository {
   ) {
     await this.initialize();
 
-    const trimmedContent = content.trim();
+    const sanitizedContent = sanitizeMessageContent(content);
     const uniqueAttachmentUploadIds = [...new Set(attachmentUploadIds.map((value) => value.trim()).filter(Boolean))];
 
-    if (!trimmedContent && uniqueAttachmentUploadIds.length === 0) {
+    if (!sanitizedContent && uniqueAttachmentUploadIds.length === 0) {
       return this.getSnapshot(currentClient);
     }
 
@@ -2288,7 +2097,7 @@ export class NormalizedDashboardRepository {
       }
 
       const createdAt = toMysqlDateTime(nowUtc());
-      const messageBody = trimmedContent || 'Attachment shared';
+      const messageBody = sanitizedContent || 'Attachment shared';
       const [messageInsert] = await connection.execute(
         `INSERT INTO messages (
           public_id, thread_id, sender_user_id, sender_counsel_partner_id, sender_system_code,
@@ -3050,7 +2859,11 @@ export class NormalizedDashboardRepository {
     const [startLabel, endLabel] = trimmedTime.split('-').map((part) => part.trim());
 
     const parse = (label: string) => {
-      const [timePart, period] = label.split(' ');
+      if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(label)) {
+        return new Date(`${trimmedDate}T${label}:00.000Z`);
+      }
+
+      const [timePart, period = ''] = label.split(' ');
       const [hourRaw, minuteRaw] = timePart.split(':').map((value) => Number(value));
 
       let hour = hourRaw;
@@ -3065,10 +2878,16 @@ export class NormalizedDashboardRepository {
         minuteRaw
       ).padStart(2, '0')}:00.000Z`);
     };
+    const start = parse(startLabel);
+    const end = parse(endLabel);
+
+    if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && end <= start) {
+      end.setUTCDate(end.getUTCDate() + 1);
+    }
 
     return {
-      end: parse(endLabel),
-      start: parse(startLabel),
+      end,
+      start,
       timeZone,
     };
   }
@@ -3762,7 +3581,9 @@ export class NormalizedDashboardRepository {
        LEFT JOIN services s ON s.id = rs.service_id
        LEFT JOIN client_accounts ca ON ca.id = sr.client_account_id
        LEFT JOIN users owner ON owner.id = ca.owner_user_id
-       WHERE sr.client_account_id = ? AND sr.archived_at IS NULL AND sr.status_code <> 'converted'
+       WHERE sr.client_account_id = ?
+         AND sr.archived_at IS NULL
+         AND sr.status_code NOT IN ('draft_payment_pending', 'converted')
        GROUP BY sr.id
        ORDER BY sr.created_at DESC`,
       [clientAccountId]

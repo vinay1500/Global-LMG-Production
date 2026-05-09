@@ -101,6 +101,8 @@ type SettingsWorkspaceProps = {
   workspace: SettingsWorkspaceResponse;
 };
 
+const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
 const ACTIVE_TAB_ORDER: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: 'General Platform' },
   { id: 'team', label: 'Team & Counsel' },
@@ -114,6 +116,7 @@ const ACTIVE_TAB_ORDER: Array<{ id: SettingsTab; label: string }> = [
 ];
 
 type GeneralPlatformForm = {
+  adminMfaRequirementMode: string;
   defaultCurrency: string;
   defaultDateFormat: string;
   defaultTimezone: string;
@@ -249,11 +252,16 @@ const GENERAL_PLATFORM_KEYS = {
   defaultDateFormat: 'platform.default_date_format',
   defaultTimezone: 'platform.default_timezone',
   displayName: 'platform.display_name',
+  adminMfaRequirementMode: 'security.admin_mfa_required_mode',
   maintenanceBannerEnabled: 'portal.maintenance_banner_enabled',
   maintenanceBannerMessage: 'portal.maintenance_banner_message',
   operationalFooterNote: 'platform.operational_footer_note',
   supportEmail: 'platform.support_email',
   supportPhone: 'platform.support_phone',
+} as const;
+
+const PRICING_PLATFORM_KEYS = {
+  showApproximateLocalCurrency: 'pricing.show_approximate_local_currency',
 } as const;
 
 const settingStringValue = (setting: PlatformSetting | undefined, fallback = '') =>
@@ -266,9 +274,13 @@ const buildGeneralPlatformForm = (settings: PlatformSetting[]): GeneralPlatformF
   const byKey = new Map(settings.map((setting) => [setting.key, setting]));
 
   return {
+    adminMfaRequirementMode: settingStringValue(
+      byKey.get(GENERAL_PLATFORM_KEYS.adminMfaRequirementMode),
+      'off'
+    ),
     defaultCurrency: settingStringValue(byKey.get(GENERAL_PLATFORM_KEYS.defaultCurrency), 'USD'),
     defaultDateFormat: settingStringValue(byKey.get(GENERAL_PLATFORM_KEYS.defaultDateFormat), 'DD/MM/YYYY'),
-    defaultTimezone: settingStringValue(byKey.get(GENERAL_PLATFORM_KEYS.defaultTimezone), 'Asia/Kolkata'),
+    defaultTimezone: settingStringValue(byKey.get(GENERAL_PLATFORM_KEYS.defaultTimezone), 'UTC'),
     displayName: settingStringValue(byKey.get(GENERAL_PLATFORM_KEYS.displayName), 'Global LMG'),
     maintenanceBannerEnabled: settingBooleanValue(
       byKey.get(GENERAL_PLATFORM_KEYS.maintenanceBannerEnabled),
@@ -537,6 +549,10 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     priceOverrides: workspace.pricingRules?.priceOverrides || [],
     urgencyRules: workspace.pricingRules?.urgencyRules || [],
   };
+  const approximateLocalCurrencySetting = platformSettingsByKey.get(
+    PRICING_PLATFORM_KEYS.showApproximateLocalCurrency
+  );
+  const showApproximateLocalCurrency = settingBooleanValue(approximateLocalCurrencySetting, true);
   const firstDomainCode = workspace.serviceDomains.find((domain) => domain.isActive)?.code || workspace.serviceDomains[0]?.code || '';
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [serviceForm, setServiceForm] = useState<ServiceFormState>({
@@ -610,6 +626,33 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   const [pricingMessage, setPricingMessage] = useState('');
   const [pricingError, setPricingError] = useState('');
   const [isSavingPricing, setIsSavingPricing] = useState(false);
+  const updateApproximateLocalCurrencySetting = async (enabled: boolean) => {
+    if (!onUpdatePlatformSetting) {
+      setPricingError('Pricing display settings are not available for this admin session.');
+      return;
+    }
+
+    if (!approximateLocalCurrencySetting) {
+      setPricingError('Pricing display setting is not configured yet. Run the latest migrations and reload settings.');
+      return;
+    }
+
+    setPricingError('');
+    setPricingMessage('');
+    setIsSavingPricing(true);
+
+    try {
+      await onUpdatePlatformSetting(PRICING_PLATFORM_KEYS.showApproximateLocalCurrency, {
+        value: enabled,
+        version: approximateLocalCurrencySetting.version,
+      });
+      setPricingMessage('Pricing display setting saved.');
+    } catch (error) {
+      setPricingError(error instanceof Error ? error.message : 'Unable to save pricing display setting.');
+    } finally {
+      setIsSavingPricing(false);
+    }
+  };
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [templateForm, setTemplateForm] = useState<TemplateFormState>({
     body: '',
@@ -791,6 +834,10 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
       { formValue: generalForm.defaultTimezone, key: GENERAL_PLATFORM_KEYS.defaultTimezone },
       { formValue: generalForm.defaultCurrency, key: GENERAL_PLATFORM_KEYS.defaultCurrency },
       { formValue: generalForm.defaultDateFormat, key: GENERAL_PLATFORM_KEYS.defaultDateFormat },
+      {
+        formValue: generalForm.adminMfaRequirementMode,
+        key: GENERAL_PLATFORM_KEYS.adminMfaRequirementMode,
+      },
       {
         formValue: generalForm.maintenanceBannerEnabled,
         key: GENERAL_PLATFORM_KEYS.maintenanceBannerEnabled,
@@ -2075,6 +2122,12 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
       return;
     }
 
+    const normalizedGstin = invoiceForm.gstin.trim().toUpperCase();
+    if (normalizedGstin && !GSTIN_PATTERN.test(normalizedGstin)) {
+      setInvoiceSaveError('GSTIN must be a 15-character Indian GSTIN.');
+      return;
+    }
+
     setInvoiceSaveError('');
     setInvoiceSaveMessage('');
     setIsSavingInvoiceSettings(true);
@@ -2093,7 +2146,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
         defaultSacCode: invoiceForm.defaultSacCode.trim() || null,
         fallbackTaxType: invoiceForm.fallbackTaxType,
         gstEnabled: invoiceForm.gstEnabled,
-        gstin: invoiceForm.gstin.trim() || null,
+        gstin: normalizedGstin || null,
         invoiceFooter: invoiceForm.invoiceFooter.trim() || null,
         invoicePrefix: invoiceForm.invoicePrefix,
         invoiceTerms: invoiceForm.invoiceTerms.trim() || null,
@@ -2350,6 +2403,18 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                       { label: 'DD MMM YYYY', value: 'DD MMM YYYY' },
                     ]}
                     value={generalForm.defaultDateFormat}
+                  />
+                  <SettingsSelect
+                    label="Admin MFA rollout mode"
+                    onChange={(value) =>
+                      setGeneralForm((current) => ({ ...current, adminMfaRequirementMode: value }))
+                    }
+                    options={[
+                      { label: 'Off', value: 'off' },
+                      { label: 'Warn admins to enroll', value: 'warn' },
+                      { label: 'Enforce after all admins enroll', value: 'enforce' },
+                    ]}
+                    value={generalForm.adminMfaRequirementMode}
                   />
                   <label className="flex items-center gap-3 rounded-lg border border-[#E6E4DD] bg-white px-3 py-2">
                     <input
@@ -2797,7 +2862,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
           {activeTab === 'pricing' ? (
             <div className="space-y-6">
               <SectionHeader
-                description="Current request quotes use service base prices, consultation mode fees, urgency fees, and exact USD country overrides."
+                description="Current request quotes, invoices, and online payments use USD as the official payable currency."
                 icon={SlidersHorizontal}
                 title="Pricing Rules"
               />
@@ -2812,8 +2877,8 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                   <p className="mt-1 text-sm font-medium text-[#2C2B29]">Urgency labels, timing, and eligibility</p>
                 </div>
                 <div className="rounded-xl border border-[#E6E4DD] bg-white p-4">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-[#8C8981]">Country rules</p>
-                  <p className="mt-1 text-sm font-medium text-[#2C2B29]">Country availability and exact USD overrides</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-[#8C8981]">Display estimate</p>
+                  <p className="mt-1 text-sm font-medium text-[#2C2B29]">Optional approximate local currency</p>
                 </div>
               </div>
               {pricingError ? (
@@ -2837,35 +2902,29 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                     <div>
                       <h3 className="text-sm font-medium text-[#2C2B29]">Service Prices</h3>
                       <p className="mt-1 text-xs text-[#8C8981]">
-                        Primary service defaults plus exact country USD overrides for new requests.
+                        Primary service amounts are official USD prices for new requests.
                       </p>
                     </div>
                     <MetaPill label={`${workspace.services.filter((service) => service.isActive).length} active`} tone="blue" />
                   </div>
                   <div className="admin-table-scroll">
-                    <table className="w-full min-w-[680px] text-sm">
+                    <table className="w-full min-w-[620px] text-sm">
                       <thead>
                         <tr className="border-b border-[#E6E4DD] text-left text-[11px] uppercase tracking-[0.18em] text-[#8C8981]">
                           <th className="py-3 pr-3">Service</th>
-                          <th className="py-3 pr-3">Default</th>
-                          <th className="py-3 pr-3">Overrides</th>
+                          <th className="py-3 pr-3">USD price</th>
                           <th className="py-3 pr-3">Status</th>
                           <th className="py-3 text-right">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#F0EEE7]">
-                        {workspace.services.map((service) => {
-                          const overrides = pricingRules.priceOverrides.filter(
-                            (override) => override.subjectType === 'service' && override.subjectCode === service.code
-                          );
-                          return (
+                        {workspace.services.map((service) => (
                             <tr key={service.id}>
                               <td className="py-3 pr-3">
                                 <p className="font-medium text-[#2C2B29]">{service.name}</p>
                                 <p className="text-xs uppercase tracking-[0.16em] text-[#A8A69F]">{service.code}</p>
                               </td>
                               <td className="py-3 pr-3">{formatPricingAmount(service.baseFee)}</td>
-                              <td className="py-3 pr-3">{overrides.length}</td>
                               <td className="py-3 pr-3">
                                 <MetaPill label={service.isActive ? 'Active' : 'Inactive'} tone={service.isActive ? 'green' : 'neutral'} />
                               </td>
@@ -2882,12 +2941,11 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                                   }
                                   type="button"
                                 >
-                                  Edit prices
+                                  Edit USD price
                                 </button>
                               </td>
                             </tr>
-                          );
-                        })}
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -2897,15 +2955,10 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                   <div className="rounded-2xl border border-[#E6E4DD] bg-white p-5 shadow-sm">
                     <h3 className="text-sm font-medium text-[#2C2B29]">Consultation Mode Prices</h3>
                     <p className="mt-1 text-xs text-[#8C8981]">
-                      Mode fees can use the default amount or exact country overrides.
+                      Mode fees are official USD amounts.
                     </p>
                     <div className="mt-4 space-y-3">
-                      {pricingRules.consultationModes.map((mode) => {
-                        const overrides = pricingRules.priceOverrides.filter(
-                          (override) =>
-                            override.subjectType === 'consultation_mode' && override.subjectCode === mode.code
-                        );
-                        return (
+                      {pricingRules.consultationModes.map((mode) => (
                           <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" key={mode.code}>
                             <div className="flex items-start justify-between gap-3">
                               <div>
@@ -2916,7 +2969,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                             </div>
                             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                               <p className="text-sm text-[#5F5C55]">
-                                Default {formatPricingAmount(mode.surchargeValue)} · {overrides.length} overrides
+                                USD fee {formatPricingAmount(mode.surchargeValue)}
                               </p>
                               <button
                                 className="rounded-lg border border-[#E6E4DD] bg-white px-3 py-1.5 text-xs text-[#5A7C96] transition hover:bg-[#F4F1EA]"
@@ -2930,38 +2983,32 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                                 }
                                 type="button"
                               >
-                                Edit prices
+                                Edit USD fee
                               </button>
                             </div>
                           </div>
-                        );
-                      })}
+                      ))}
                     </div>
                   </div>
 
                   <div className="rounded-2xl border border-[#E6E4DD] bg-white p-5 shadow-sm">
-                    <h3 className="text-sm font-medium text-[#2C2B29]">Country Defaults</h3>
+                    <h3 className="text-sm font-medium text-[#2C2B29]">Approximate Local Display</h3>
                     <p className="mt-1 text-xs text-[#8C8981]">
-                      Countries available for pricing. New quotes and invoices use USD amounts.
+                      Client prices stay payable in USD. When enabled, clients may also see an informational local estimate in brackets.
                     </p>
-                    <div className="mt-4 space-y-3">
-                      {pricingRules.countryPricing.map((rule) => (
-                        <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" key={rule.id}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-medium text-[#2C2B29]">{rule.countryName}</p>
-                              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-[#8C8981]">
-                                {rule.countryCode} · {rule.currencyCode}
-                              </p>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {rule.isDefault ? <MetaPill label="Default" tone="blue" /> : null}
-                              <MetaPill label={rule.isActive ? 'Active' : 'Inactive'} tone={rule.isActive ? 'green' : 'neutral'} />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <label className="mt-4 flex items-center gap-3 rounded-lg border border-[#E6E4DD] bg-[#FCFBF8] px-3 py-2">
+                      <input
+                        checked={showApproximateLocalCurrency}
+                        className="h-4 w-4 accent-[#C19A5B]"
+                        disabled={isSavingPricing || !approximateLocalCurrencySetting}
+                        onChange={(event) => void updateApproximateLocalCurrencySetting(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span className="text-sm text-[#2C2B29]">Show approximate local currency to clients</span>
+                    </label>
+                    <p className="mt-3 text-xs text-[#8C8981]">
+                      Example: $120.00 (approx. local equivalent). The invoice and payment order remain USD.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -3166,7 +3213,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                   3. Configuration Controls
                 </p>
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 gap-6">
                 <div>
                   <h3 className="text-sm font-medium text-[#2C2B29] mb-3">Consultation Modes</h3>
                   <form className="mb-4 rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" onSubmit={submitConsultationMode}>
@@ -3297,7 +3344,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                   </div>
                 </div>
 
-                <div>
+                <div className="hidden">
                   <h3 className="text-sm font-medium text-[#2C2B29] mb-3">Country Availability</h3>
                   <form className="mb-4 rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" onSubmit={submitCountryPricing}>
                     <div className="mb-4 flex items-center justify-between gap-3">
@@ -3494,6 +3541,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                     value={invoiceForm.billingDisplayName}
                   />
                   <SettingsInput
+                    helperText="15-character GSTIN, if applicable."
                     label="GSTIN"
                     onChange={(value) => setInvoiceForm((current) => ({ ...current, gstin: value.toUpperCase() }))}
                     placeholder="Optional"
@@ -4768,7 +4816,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
             <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4">
               <p className="text-sm font-medium text-[#2C2B29]">Default price</p>
               <p className="mt-1 text-xs text-[#8C8981]">
-                Used for all countries without an exact override. Country defaults may still apply currency/fallback rules.
+                Official USD amount used for every country. Local currency equivalents are informational only.
               </p>
               <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
                 <SettingsInput
@@ -4789,7 +4837,11 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
               </div>
             </div>
 
-            <form className="mt-4 rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" onSubmit={submitPriceOverride}>
+            <div className="mt-4 rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4 text-sm text-[#5F5C55]">
+              Country-specific official price overrides are retired. Edit the USD default above for future quotes.
+            </div>
+
+            <form className="hidden mt-4 rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" onSubmit={submitPriceOverride}>
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-[#2C2B29]">
@@ -4856,7 +4908,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
               </button>
             </form>
 
-            <div className="mt-4 space-y-2">
+            <div className="hidden mt-4 space-y-2">
               {getOverridesForSubject(pricingEditorSubject).map((override) => (
                 <div className="rounded-xl border border-[#E6E4DD] bg-white p-3" key={override.id}>
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -4939,6 +4991,7 @@ const ReadOnlyNotice = ({ text }: { text: string }) => (
 
 const SettingsInput = ({
   disabled = false,
+  helperText,
   label,
   onChange,
   placeholder,
@@ -4946,6 +4999,7 @@ const SettingsInput = ({
   value,
 }: {
   disabled?: boolean;
+  helperText?: string;
   label: string;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -4962,6 +5016,7 @@ const SettingsInput = ({
       type={type}
       value={value}
     />
+    {helperText ? <span className="block text-xs text-[#8C8981]">{helperText}</span> : null}
   </label>
 );
 

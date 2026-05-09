@@ -1,6 +1,7 @@
 import type { RowDataPacket } from 'mysql2/promise';
 import { env } from '../config/env.js';
 import { closeMysqlPool, getMysqlPool } from '../lib/mysql.js';
+import { providerFetch } from '../lib/providerHttp.js';
 import { normalizeCurrencyCode } from '../modules/pricing/fx.js';
 
 type CurrencyRow = RowDataPacket & {
@@ -43,7 +44,13 @@ const fetchRates = async (baseCurrency: string) => {
 
   for (const url of urls) {
     try {
-      const response = await fetch(url, { headers: { accept: 'application/json' } });
+      const response = await providerFetch(url, {
+        headers: { accept: 'application/json' },
+        operation: 'refresh_fx_rates',
+        providerCode: 'fx',
+        retryDelayMs: 200,
+        safeToRetry: true,
+      });
       if (!response.ok) {
         failures.push(`${new URL(url).host}: HTTP ${response.status}`);
         continue;

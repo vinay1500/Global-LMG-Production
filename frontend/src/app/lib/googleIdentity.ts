@@ -19,6 +19,7 @@ interface GoogleAccountsIdApi {
     cancel_on_tap_outside?: boolean;
     client_id: string;
     context?: 'signin';
+    nonce?: string;
     use_fedcm_for_prompt?: boolean;
   }) => void;
   prompt: (listener?: (notification: GooglePromptMomentNotification) => void) => void;
@@ -120,7 +121,7 @@ export const loadGoogleIdentitySdk = async () => {
   await sdkLoadPromise;
 };
 
-export const requestGoogleIdToken = async () => {
+export const requestGoogleIdToken = async (nonce: string) => {
   await loadGoogleIdentitySdk();
 
   return new Promise<string>((resolve, reject) => {
@@ -155,6 +156,7 @@ export const requestGoogleIdToken = async () => {
       client_id: GOOGLE_CLIENT_ID,
       context: 'signin',
       cancel_on_tap_outside: true,
+      nonce,
       use_fedcm_for_prompt: true,
       callback: (response) => {
         const credential = response.credential?.trim();
@@ -204,6 +206,7 @@ export const requestGoogleIdToken = async () => {
 export const mountGoogleIdentityButton = async (
   container: HTMLElement,
   options: {
+    nonce: string;
     onCredential: (credential: string) => void;
     onError?: (error: Error) => void;
     width?: number;
@@ -223,6 +226,7 @@ export const mountGoogleIdentityButton = async (
     client_id: GOOGLE_CLIENT_ID,
     context: 'signin',
     cancel_on_tap_outside: true,
+    nonce: options.nonce,
     use_fedcm_for_prompt: true,
     callback: (response) => {
       const credential = response.credential?.trim();

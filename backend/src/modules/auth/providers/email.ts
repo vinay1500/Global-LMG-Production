@@ -1,5 +1,6 @@
 import { env } from '../../../config/env.js';
 import { serviceUnavailable } from '../../../lib/httpErrors.js';
+import { providerFetch } from '../../../lib/providerHttp.js';
 import type { DeliveryResult, SendEmailCodeInput } from './types.js';
 
 const buildSubject = (purpose: SendEmailCodeInput['purpose']) =>
@@ -40,12 +41,15 @@ export const emailAuthProvider = {
       );
     }
 
-    const response = await fetch('https://api.resend.com/emails', {
+    const response = await providerFetch('https://api.resend.com/emails', {
       method: 'POST',
+      operation: 'send_auth_code_email',
+      providerCode: 'resend',
       headers: {
         Authorization: `Bearer ${env.RESEND_API_KEY}`,
         'Content-Type': 'application/json',
       },
+      safeToRetry: false,
       body: JSON.stringify({
         from: env.EMAIL_FROM_ADDRESS,
         html: `<p>${buildBodyText(input).replace(/\n/g, '<br />')}</p>`,

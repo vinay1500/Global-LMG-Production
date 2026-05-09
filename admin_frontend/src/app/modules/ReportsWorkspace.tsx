@@ -7,7 +7,6 @@ import {
   Download,
   ExternalLink,
   FileText,
-  Filter,
   Layers,
   Loader2,
   Printer,
@@ -211,9 +210,6 @@ export const ReportsWorkspace: React.FC<ReportsWorkspaceProps> = ({ workspace })
               </button>
             ))}
           </div>
-          <button className="px-4 py-2 bg-white border border-dashed border-[#E6E4DD] rounded-lg shadow-sm text-sm font-medium text-[#8C8981] cursor-not-allowed flex items-center gap-2" disabled type="button">
-            <Filter className="w-4 h-4 text-[#8C8981]" /> Filters Later
-          </button>
           <button
             className="px-4 py-2 bg-white border border-[#E6E4DD] rounded-lg shadow-sm text-sm font-medium text-[#2C2B29] hover:bg-[#F4F1EA] transition flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!activeDrilldown || isExportingCsv}

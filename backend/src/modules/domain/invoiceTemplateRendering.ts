@@ -1,5 +1,4 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
-import { formatCurrencyAmount } from '../../lib/currencyFormat.js';
 import { selectAll, selectOne } from '../../lib/mysqlUtils.js';
 
 type InvoiceTemplateRow = RowDataPacket & {
@@ -58,14 +57,23 @@ const FALLBACK_FOOTER =
 const PLACEHOLDER_PATTERN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 
 const formatDate = (value: string) =>
-  new Intl.DateTimeFormat('en-IN', {
+  new Intl.DateTimeFormat('en-US', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
   }).format(new Date(value));
 
-const formatCurrency = (amount: number, currencyCode: string) =>
-  formatCurrencyAmount(amount, currencyCode);
+const formatCurrency = (amount: number, currencyCode: string) => {
+  const normalizedCurrency = /^[A-Z]{3}$/.test(String(currencyCode || '').trim().toUpperCase())
+    ? String(currencyCode || '').trim().toUpperCase()
+    : 'USD';
+  const formattedAmount = Number(amount || 0).toLocaleString('en-US', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
+
+  return `${normalizedCurrency} ${formattedAmount}`;
+};
 
 const renderTemplate = (template: string, context: Record<string, string>) =>
   template.replace(PLACEHOLDER_PATTERN, (_placeholder, key: string) => context[key] ?? '');
@@ -209,7 +217,7 @@ export const renderAndStoreInvoiceTemplateSnapshot = async (
     dueDate: formatDate(row.dueDate),
     footer,
     footerNote: footer,
-    gstin: row.gstin || 'Not configured',
+    gstin: row.gstin || '',
     invoiceNumber: row.invoiceNumber,
     issueDate: formatDate(row.issueDate),
     lineItems,

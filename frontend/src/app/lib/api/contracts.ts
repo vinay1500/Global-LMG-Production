@@ -32,18 +32,6 @@ export interface ApiHealthResponse {
   uptimeSeconds?: number;
 }
 
-export interface ClientIntakeSubmission {
-  companyName: string;
-  contactEmail: string;
-  contactName: string;
-  message: string;
-  practiceArea?: string;
-}
-
-export interface ClientIntakeSubmissionResponse {
-  message: string;
-}
-
 export interface AuthSessionUser {
   avatar: string;
   email: string;
@@ -125,6 +113,7 @@ export interface RequestPricingConfigResponse {
     id: string;
     name: string;
   }>;
+  showApproximateLocalCurrency: boolean;
   services: Array<{
     baseFee: number;
     description: string;
@@ -400,4 +389,33 @@ export interface InvoicePaymentVerifyResponse {
   invoiceStatus: string;
   paymentId: string | null;
   status: 'authorized' | 'paid';
+}
+
+export interface RequestPaymentOrderResponse {
+  amount: number;
+  amountMinor: number;
+  currencyCode: string;
+  customer: {
+    email: string;
+    name: string;
+    phone: string | null;
+  };
+  keyId: string;
+  orderId: string;
+  provider: 'razorpay';
+  receipt: string;
+  requestId: string;
+  requestNumber: string;
+}
+
+export interface DashboardRequestPaymentSubmissionResponse {
+  paymentOrder: RequestPaymentOrderResponse;
+  requestId: string;
+}
+
+export interface DashboardRequestPaymentVerifyResponse {
+  matterId: string | null;
+  paymentId: string | null;
+  requestId: string;
+  status: 'authorized' | 'submitted';
 }

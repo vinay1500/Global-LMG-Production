@@ -28,6 +28,38 @@ export const createNumericCode = (length = 6) => {
 export const hashOpaqueValue = (value: string, secret: string) =>
   createHmac('sha256', secret).update(value).digest('hex');
 
+export const timingSafeStringEqual = (left: string, right: string) => {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
+};
+
+export const createSignedCsrfToken = (secret: string) => {
+  const nonce = createRandomToken(18);
+  const signature = hashOpaqueValue(nonce, secret);
+  return `${nonce}.${signature}`;
+};
+
+export const verifySignedCsrfToken = (token: string, secret: string) => {
+  const parts = token.split('.');
+  if (parts.length !== 2) {
+    return false;
+  }
+
+  const [nonce, signature] = parts;
+
+  if (!nonce || !signature || !/^[a-f0-9]{64}$/i.test(signature)) {
+    return false;
+  }
+
+  return timingSafeStringEqual(hashOpaqueValue(nonce, secret), signature.toLowerCase());
+};
+
 export const hashPassword = async (password: string) => {
   const salt = randomBytes(16);
   const derivedKey = (await scrypt(password, salt, SCRYPT_KEY_LENGTH)) as Buffer;

@@ -21,7 +21,7 @@ const getMysqlSslConfig = () => {
 export const getMysqlPool = () => {
   if (!mysqlPool) {
     mysqlPool = mysql.createPool({
-      connectTimeout: env.MYSQL_CONNECTION_TIMEOUT_MS,
+      connectTimeout: env.MYSQL_CONNECT_TIMEOUT_MS,
       dateStrings: true,
       database: env.MYSQL_DATABASE,
       host: env.MYSQL_HOST,
@@ -30,9 +30,9 @@ export const getMysqlPool = () => {
       ssl: getMysqlSslConfig(),
       timezone: 'Z',
       user: env.MYSQL_USER,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
+      waitForConnections: env.MYSQL_WAIT_FOR_CONNECTIONS,
+      connectionLimit: env.MYSQL_CONNECTION_LIMIT,
+      queueLimit: env.MYSQL_QUEUE_LIMIT,
     });
   }
 

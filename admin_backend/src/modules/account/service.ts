@@ -2,6 +2,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { badRequest, notFound } from '../../lib/httpErrors.js';
 import { executeStatement, queryRows, withTransaction } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
+import { getAdminMfaRequirementMode } from '../settings/platformSettings.js';
 import { createAuditEvent } from '../writeSupport.js';
 
 type AccountRow = RowDataPacket & {
@@ -17,6 +18,7 @@ type AccountRow = RowDataPacket & {
   inAppNotificationsEnabled: number | null;
   jobTitle: string | null;
   lastName: string | null;
+  mfaEnabledAt: string | null;
   phone: string | null;
   state: string | null;
   timezoneName: string;
@@ -107,7 +109,11 @@ const assertPhoneAvailable = async (actor: AdminActor, phone: string | null) => 
 
 const actorRole = (actor: AdminActor) => actor.roleCodes[0] || 'ops_admin';
 
-const toAccountResponse = (actor: AdminActor, row: AccountRow) => ({
+const toAccountResponse = (
+  actor: AdminActor,
+  row: AccountRow,
+  mfaRequirementMode: Awaited<ReturnType<typeof getAdminMfaRequirementMode>>
+) => ({
   preferences: {
     avatarColor: row.avatarColor || DEFAULT_PREFERENCES.avatarColor,
     dateFormat: row.dateFormat || DEFAULT_PREFERENCES.dateFormat,
@@ -134,6 +140,11 @@ const toAccountResponse = (actor: AdminActor, row: AccountRow) => ({
     state: row.state || '',
     timezoneName: row.timezoneName,
   },
+  security: {
+    mfaEnabled: Boolean(row.mfaEnabledAt),
+    mfaEnabledAt: row.mfaEnabledAt,
+    mfaRequirementMode,
+  },
 });
 
 export const getAdminAccount = async (actor: AdminActor) => {
@@ -149,6 +160,7 @@ export const getAdminAccount = async (actor: AdminActor) => {
        sp.job_title AS jobTitle,
        sp.city,
        sp.state,
+       ams.enabled_at AS mfaEnabledAt,
        aup.default_landing_path AS defaultLandingPath,
        aup.date_format AS dateFormat,
        aup.density_code AS densityCode,
@@ -157,6 +169,7 @@ export const getAdminAccount = async (actor: AdminActor) => {
      FROM users u
      LEFT JOIN staff_profiles sp ON sp.user_id = u.id
      LEFT JOIN admin_user_preferences aup ON aup.user_id = u.id
+     LEFT JOIN admin_mfa_secrets ams ON ams.user_id = u.id AND ams.enabled_at IS NOT NULL
      WHERE u.id = ?
        AND u.archived_at IS NULL
      LIMIT 1`,
@@ -168,7 +181,7 @@ export const getAdminAccount = async (actor: AdminActor) => {
     throw notFound('admin_profile_not_found', 'Admin profile was not found.');
   }
 
-  return toAccountResponse(actor, account);
+  return toAccountResponse(actor, account, await getAdminMfaRequirementMode());
 };
 
 export const updateAdminProfile = async (actor: AdminActor, payload: AdminProfileUpdatePayload) => {
@@ -187,6 +200,7 @@ export const updateAdminProfile = async (actor: AdminActor, payload: AdminProfil
          sp.job_title AS jobTitle,
          sp.city,
          sp.state,
+         NULL AS mfaEnabledAt,
          NULL AS defaultLandingPath,
          NULL AS dateFormat,
          NULL AS densityCode,

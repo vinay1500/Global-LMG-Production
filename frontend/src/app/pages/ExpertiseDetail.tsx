@@ -3,7 +3,8 @@ import { useParams, Link, useNavigate } from 'react-router';
 import { ArrowLeft, Globe, Scale, Landmark } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Seo } from '../components/seo/Seo';
-import { CLIENT_INTAKE_HREF } from '../config/launchLinks';
+import { ExternalFormCta } from '../components/shared/ExternalFormCta';
+import { CLIENT_INTAKE_FORM_LINK } from '../config/launchLinks';
 import { EXPERTISE_CATALOG, getExpertiseCategoryById } from '../data/expertiseCatalog';
 import { buildWebPageJsonLd } from '../seo/jsonLd';
 import { NotFoundPage } from './NotFoundPage';
@@ -146,15 +147,13 @@ export const ExpertiseDetail = () => {
             </p>
             
             
-            <a
-              href={CLIENT_INTAKE_HREF}
-              target="_blank"
-              rel="noopener noreferrer"
-              referrerPolicy="no-referrer"
+            <ExternalFormCta
+              formLink={CLIENT_INTAKE_FORM_LINK}
+              fallbackClassName="block max-w-[240px] text-sm leading-relaxed text-gray-500"
               className="w-full inline-flex items-center justify-center py-4 bg-black text-white rounded-full font-bold uppercase tracking-widest text-xs hover:bg-gray-800 transition-colors"
             >
               Contact Practice Lead
-            </a>
+            </ExternalFormCta>
           </div>
         </div>
       </div>

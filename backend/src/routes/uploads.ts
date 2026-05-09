@@ -78,11 +78,13 @@ uploadsRouter.get(
       getUploadIdParam(request)
     );
 
+    response.setHeader('Cache-Control', 'no-store');
     response.setHeader(
       'Content-Disposition',
       `attachment; filename="${sanitizeDownloadFilename(result.upload.originalName)}"`
     );
     response.setHeader('Content-Type', result.upload.mimeType);
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     response.send(result.content);
   })
 );

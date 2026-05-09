@@ -3,15 +3,25 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "engines": {
+    "node": ">=20 <21",
+    "npm": ">=10"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "cleanup:retention": "tsx src/scripts/cleanupRetention.ts",
+    "retention:cleanup": "tsx src/scripts/cleanupRetention.ts",
     "dev": "tsx watch src/server.ts",
     "fx:refresh": "tsx src/scripts/refreshFxRates.ts",
+    "uploads:cleanup-expired": "tsx src/scripts/cleanupExpiredUploadIntents.ts",
+    "documents:expire-pending-scans": "tsx src/scripts/expirePendingDocumentScans.ts",
     "migrate": "tsx src/scripts/runMigrations.ts",
     "migrate:prod": "node dist/scripts/runMigrations.js",
+    "requests:expire-payment-drafts": "tsx src/scripts/expirePendingRequestDrafts.ts",
     "smoke:rate-limit": "tsx src/scripts/rateLimitSmoke.ts",
     "smoke:sentry": "tsx src/scripts/sentrySmoke.ts",
     "start": "node dist/server.js",
+    "lint": "node ../node_modules/eslint/bin/eslint.js src --cache --cache-location .eslintcache",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -23,14 +33,12 @@
     "helmet": "^8.1.0",
     "mysql2": "^3.15.2",
     "pdf-lib": "^1.17.1",
-    "pdfkit": "^0.18.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^25.5.0",
-    "@types/pdfkit": "^0.17.5",
     "tsx": "^4.20.6",
     "typescript": "^6.0.2"
   }
