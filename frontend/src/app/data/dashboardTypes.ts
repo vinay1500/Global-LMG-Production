@@ -180,6 +180,19 @@ export interface MatterPackage {
   supersededAt?: string;
 }
 
+export interface InvoicePaymentOptions {
+  allowsPartial: boolean;
+  amountDue: number;
+  currencyCode: string;
+  minimumPaymentAmount: number;
+  offlineEnabled: boolean;
+  onlineEnabled: boolean;
+  payable: boolean;
+  paymentDisabledReason: string | null;
+  paymentProvider: 'razorpay' | null;
+  suggestedPaymentAmount: number;
+}
+
 export interface Invoice {
   id: string;
   matterId: string;
@@ -189,6 +202,7 @@ export interface Invoice {
   clientName: string;
   currencyCode: string;
   amount: number;
+  amountDue: number;
   tax: number;
   discount: number;
   totalAmount: number;
@@ -196,6 +210,7 @@ export interface Invoice {
   issueDate: string;
   dueDate: string;
   paidDate?: string;
+  paymentOptions: InvoicePaymentOptions;
   items: Array<{ description: string; quantity: number; rate: number; amount: number }>;
 }
 

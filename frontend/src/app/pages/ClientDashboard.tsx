@@ -578,17 +578,7 @@ export const ClientDashboard = () => {
   };
 
   const handlePayInvoice = (invoiceId: string) => {
-    const invoice = myInvoices.find((entry) => entry.id === invoiceId);
-
-    if (invoice?.matterId) {
-      const relatedMatter = myMatters.find((matter) => matter.id === invoice.matterId);
-      if (relatedMatter) {
-        setSelectedMatter(relatedMatter);
-        return;
-      }
-    }
-
-    handleOpenBilling();
+    handleOpenInvoice(invoiceId);
   };
 
   const handleSelectPackage = async (

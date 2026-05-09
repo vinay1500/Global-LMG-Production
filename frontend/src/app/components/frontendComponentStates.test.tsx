@@ -115,6 +115,9 @@ const baseInvoice: InvoiceDetailResponse = {
     minimumPaymentAmount: 50,
     offlineEnabled: true,
     onlineEnabled: true,
+    payable: true,
+    paymentDisabledReason: null,
+    paymentProvider: 'razorpay',
     suggestedPaymentAmount: 120,
   },
   statusCode: 'issued',
@@ -258,11 +261,12 @@ describe('InvoiceDetailSection', () => {
       />
     );
 
-    await user.click(screen.getByRole('button', { name: /pay \$120/i }));
+    await user.click(screen.getByRole('button', { name: /pay online/i }));
 
     await waitFor(() =>
       expect(onPayOnline).toHaveBeenCalledWith('invoice-public-id', 120)
     );
+    expect(screen.getByText(/secure online payment · \$120/i)).toBeInTheDocument();
     expect(
       await screen.findByText('Payment confirmed. Your invoice balance has been updated.')
     ).toBeInTheDocument();
@@ -274,7 +278,13 @@ describe('InvoiceDetailSection', () => {
         errorMessage={null}
         invoice={{
           ...baseInvoice,
-          paymentOptions: { ...baseInvoice.paymentOptions, onlineEnabled: false },
+          paymentOptions: {
+            ...baseInvoice.paymentOptions,
+            onlineEnabled: false,
+            paymentDisabledReason:
+              'Online payment is not available for this invoice. Please contact billing support.',
+            paymentProvider: null,
+          },
         }}
         isLoading={false}
         onBack={vi.fn()}
@@ -286,7 +296,7 @@ describe('InvoiceDetailSection', () => {
 
     expect(screen.getByRole('button', { name: /download pdf/i })).toBeInTheDocument();
     expect(
-      screen.getByText('Online payment is not available for this invoice right now.')
+      screen.getByText('Online payment is not available for this invoice. Please contact billing support.')
     ).toBeInTheDocument();
     expect(
       screen.getByText(/For offline payment, contact the billing team/i)

@@ -620,22 +620,55 @@ export const getInvoicePaymentOptions = (invoice: {
   installments: Array<{ amountRemaining: number; statusCode: string }>;
   statusCode: string;
 }) => {
+  const currencyCode = (invoice.currencyCode || 'USD').toUpperCase();
+  const amountDue = Number(invoice.amountDue || 0);
+  const statusCode = String(invoice.statusCode || '').toLowerCase();
   const unpaidInstallments = invoice.installments.filter(
     (installment) => installment.amountRemaining > 0 && installment.statusCode !== 'paid'
   );
   const allowsPartial = unpaidInstallments.length > 1;
   const minimumPaymentAmount = allowsPartial
-    ? Number(unpaidInstallments[0]?.amountRemaining || invoice.amountDue)
-    : Number(invoice.amountDue || 0);
+    ? Number(unpaidInstallments[0]?.amountRemaining || amountDue)
+    : amountDue;
+  const invoicePayable =
+    amountDue > 0 && currencyCode === 'USD' && !['draft', 'paid', 'void', 'cancelled'].includes(statusCode);
+  const providerReady =
+    env.PAYMENT_PROVIDER_MODE === 'razorpay' &&
+    Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) &&
+    getAllowedRazorpayCurrencies().has('USD');
+  const onlineEnabled = invoicePayable && providerReady;
+  const paymentProvider: 'razorpay' | null = onlineEnabled ? 'razorpay' : null;
+  const paymentDisabledReason = (() => {
+    if (amountDue <= 0 || statusCode === 'paid') {
+      return 'This invoice is fully paid.';
+    }
+
+    if (['draft', 'void', 'cancelled'].includes(statusCode)) {
+      return 'Online payment is not available for this invoice. Please contact billing support.';
+    }
+
+    if (currencyCode !== 'USD') {
+      return 'Online payment is available only for USD invoices. Please contact billing support.';
+    }
+
+    if (!providerReady) {
+      return 'Online payment is not available for this invoice. Please contact billing support.';
+    }
+
+    return null;
+  })();
 
   return {
     allowsPartial,
-    amountDue: Number(invoice.amountDue || 0),
-    currencyCode: invoice.currencyCode || 'USD',
+    amountDue,
+    currencyCode,
     minimumPaymentAmount,
     offlineEnabled: true,
-    onlineEnabled: env.PAYMENT_PROVIDER_MODE === 'razorpay' && Boolean(env.RAZORPAY_KEY_ID),
-    suggestedPaymentAmount: allowsPartial ? minimumPaymentAmount : Number(invoice.amountDue || 0),
+    onlineEnabled,
+    payable: invoicePayable,
+    paymentDisabledReason,
+    paymentProvider,
+    suggestedPaymentAmount: allowsPartial ? minimumPaymentAmount : amountDue,
   };
 };
 

@@ -87,7 +87,7 @@ export const MatterDetailSection = ({
   const matterCurrencyCode = selectedMatter.currencyCode || matterInvoices[0]?.currencyCode || 'USD';
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       <button
         type="button"
         onClick={onBack}
@@ -96,14 +96,14 @@ export const MatterDetailSection = ({
         <ArrowLeft className="h-4 w-4" /> Back to {activeTab === 'cases' ? 'My Cases' : 'Dashboard'}
       </button>
 
-      <div className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
+      <div className="max-w-full overflow-hidden rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
         <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-          <div>
+          <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <h1 className="text-xl" style={{ fontFamily: "'Playfair Display', serif" }}>
+              <h1 className="min-w-0 break-words text-xl" style={{ fontFamily: "'Playfair Display', serif" }}>
                 {selectedMatter.title}
               </h1>
-              <span className="font-mono text-xs text-gray-400">{selectedMatter.referenceCode}</span>
+              <span className="break-all font-mono text-xs text-gray-400">{selectedMatter.referenceCode}</span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={selectedMatter.operationalStatus} size="md" />
@@ -111,13 +111,13 @@ export const MatterDetailSection = ({
               <UrgencyDot urgency={selectedMatter.urgency} />
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 lg:justify-end">
             {selectedMatter.meetingLink && (
               <a
                 href={selectedMatter.meetingLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 rounded-lg bg-blue-50 px-3 py-1.5 text-xs text-blue-700 hover:bg-blue-100"
+                className="flex min-w-0 items-center gap-1 rounded-lg bg-blue-50 px-3 py-1.5 text-xs text-blue-700 hover:bg-blue-100"
               >
                 <Video className="h-3.5 w-3.5" /> Join Call
               </a>
@@ -136,15 +136,17 @@ export const MatterDetailSection = ({
           </div>
         </div>
 
-        <div className="mb-6">
-          <LifecycleStepper stages={selectedMatter.stages} />
+        <div className="mb-6 overflow-x-auto pb-2">
+          <div className="min-w-[28rem] sm:min-w-0">
+            <LifecycleStepper stages={selectedMatter.stages} />
+          </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-2">
+        <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
+          <div className="min-w-0 space-y-6">
             <div>
               <h3 className="mb-2 text-sm text-gray-500">Issue Summary</h3>
-              <p className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">
+              <p className="break-words rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">
                 {selectedMatter.issueSummary}
               </p>
             </div>
@@ -191,26 +193,26 @@ export const MatterDetailSection = ({
                   </div>
                 )}
 
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   {activeProposalPackages.map((pkg) => {
                     const isLocked = activeSelectionLocked && !pkg.isSelected;
                     return (
                       <div
                         key={pkg.id}
-                        className={`relative flex h-full flex-col rounded-xl border bg-white p-5 shadow-sm ${
+                        className={`relative flex h-full min-w-0 flex-col overflow-hidden rounded-xl border bg-white p-5 shadow-sm ${
                           pkg.isRecommended
                             ? 'border-gray-900 ring-1 ring-gray-900/10'
                             : 'border-gray-200'
                         }`}
                       >
-                        <div className="mb-3 flex items-start justify-between gap-3">
-                          <div>
-                            <h4 className="text-base font-semibold text-gray-900">{pkg.name}</h4>
-                            <p className="mt-1 text-sm text-gray-500">
+                        <div className="mb-3 flex flex-col items-start justify-between gap-3 sm:flex-row">
+                          <div className="min-w-0">
+                            <h4 className="break-words text-base font-semibold text-gray-900">{pkg.name}</h4>
+                            <p className="mt-1 break-words text-sm text-gray-500">
                               {pkg.description || 'Custom package tailored to this matter.'}
                             </p>
                           </div>
-                          <div className="flex flex-col items-end gap-2">
+                          <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">
                             {pkg.isRecommended && (
                               <span className="rounded-full bg-gray-900 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-white">
                                 Recommended
@@ -231,9 +233,9 @@ export const MatterDetailSection = ({
                         <div className="flex-1 space-y-2">
                           {(pkg.features.length > 0 ? pkg.features : pkg.services.map(getServiceName)).map(
                             (feature, index) => (
-                              <div key={`${pkg.id}-${index}`} className="flex items-start gap-2 text-sm text-gray-700">
-                                <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                                <span>{feature}</span>
+                              <div key={`${pkg.id}-${index}`} className="flex min-w-0 items-start gap-2 text-sm text-gray-700">
+                                <div className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
+                                <span className="min-w-0 break-words">{feature}</span>
                               </div>
                             )
                           )}
@@ -273,9 +275,9 @@ export const MatterDetailSection = ({
                 <h3 className="mb-2 text-sm text-gray-500">Updates</h3>
                 <div className="space-y-2">
                   {selectedMatter.clientVisibleNotes.map((note, index) => (
-                    <div key={index} className="flex items-start gap-2 text-sm text-gray-700">
+                    <div key={index} className="flex min-w-0 items-start gap-2 text-sm text-gray-700">
                       <div className="mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-gray-400" />
-                      {note}
+                      <span className="min-w-0 break-words">{note}</span>
                     </div>
                   ))}
                 </div>
@@ -289,11 +291,11 @@ export const MatterDetailSection = ({
                   {matterDocuments.map((document) => (
                     <div
                       key={document.id}
-                      className="flex items-center gap-3 rounded-lg bg-gray-50 px-4 py-2"
+                      className="flex flex-wrap items-center gap-3 rounded-lg bg-gray-50 px-4 py-2"
                     >
-                      <FileText className="h-4 w-4 text-gray-400" />
-                      <span className="flex-1 truncate text-sm">{document.name}</span>
-                      <span className="text-xs text-gray-400">{formatSize(document.size)}</span>
+                      <FileText className="h-4 w-4 flex-shrink-0 text-gray-400" />
+                      <span className="min-w-0 flex-1 break-words text-sm sm:truncate">{document.name}</span>
+                      <span className="shrink-0 text-xs text-gray-400">{formatSize(document.size)}</span>
                       <button
                         type="button"
                         disabled={!safePreviewTypes.has(document.type.toUpperCase())}
@@ -325,14 +327,14 @@ export const MatterDetailSection = ({
                 <h3 className="mb-2 text-sm text-gray-500">Upcoming Events</h3>
                 {matterEvents.map((event) => (
                   <div key={event.id} className="space-y-1 rounded-lg bg-gray-50 px-4 py-3">
-                    <p className="text-sm">{event.title}</p>
+                    <p className="break-words text-sm">{event.title}</p>
                     <p className="text-xs text-gray-500">
                       {formatDate(event.date)} · {event.time} · {event.location || 'Video'}
                     </p>
                     {event.meetLink && (
                       <a
                         href={event.meetLink}
-                        className="flex items-center gap-1 text-xs text-blue-600 hover:underline"
+                        className="flex min-w-0 items-center gap-1 break-all text-xs text-blue-600 hover:underline"
                       >
                         <ExternalLink className="h-3 w-3" /> Join Call
                       </a>
@@ -346,19 +348,19 @@ export const MatterDetailSection = ({
             )}
           </div>
 
-          <div className="space-y-4">
-            <div className="space-y-3 rounded-xl bg-gray-50 p-4">
+          <div className="min-w-0 space-y-4">
+            <div className="min-w-0 space-y-3 rounded-xl bg-gray-50 p-4">
               <h3 className="text-xs uppercase tracking-wider text-gray-400">Fee Summary</h3>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-3">
                   <span className="text-gray-500">Total Fee</span>
                   <span>{formatCurrency(selectedMatter.totalFee, matterCurrencyCode)}</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-3">
                   <span className="text-gray-500">Paid</span>
                   <span className="text-emerald-600">{formatCurrency(selectedMatter.paidAmount, matterCurrencyCode)}</span>
                 </div>
-                <div className="flex justify-between border-t border-gray-200 pt-2">
+                <div className="flex justify-between gap-3 border-t border-gray-200 pt-2">
                   <span className="text-gray-500">Due</span>
                   <span className={selectedMatter.dueAmount > 0 ? 'text-amber-600' : 'text-emerald-600'}>
                     {formatCurrency(selectedMatter.dueAmount, matterCurrencyCode)}
@@ -377,9 +379,9 @@ export const MatterDetailSection = ({
             </div>
 
             {selectedPackage && (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">Selected Package</h3>
-                <p className="text-sm font-medium text-gray-900">{selectedPackage.name}</p>
+                <p className="break-words text-sm font-medium text-gray-900">{selectedPackage.name}</p>
                 <p className="text-xs text-gray-500">
                   Proposal v{selectedPackage.proposalVersion} · {formatCurrency(selectedPackage.price, selectedPackage.currencyCode || matterCurrencyCode)}
                 </p>
@@ -392,76 +394,76 @@ export const MatterDetailSection = ({
             )}
 
             {selectedMatter.assignments?.some((entry) => entry.type === 'external_counsel') ? (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">External Counsel Contact</h3>
                 <div className="space-y-1 text-sm">
                   {selectedMatter.assignments
                     .filter((entry) => entry.type === 'external_counsel')
                     .map((entry) => (
-                      <p key={entry.id}>{entry.name}</p>
+                      <p key={entry.id} className="break-words">{entry.name}</p>
                     ))}
                 </div>
               </div>
             ) : selectedMatter.assignedCounsel ? (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">External Counsel Contact</h3>
-                <p className="text-sm">{selectedMatter.assignedCounsel}</p>
+                <p className="break-words text-sm">{selectedMatter.assignedCounsel}</p>
               </div>
             ) : null}
             {selectedMatter.assignments?.some((entry) => entry.type === 'internal_staff') ? (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">Coordination Contact</h3>
                 <div className="space-y-1 text-sm">
                   {selectedMatter.assignments
                     .filter((entry) => entry.type === 'internal_staff')
                     .map((entry) => (
-                      <p key={entry.id}>{entry.name}</p>
+                      <p key={entry.id} className="break-words">{entry.name}</p>
                     ))}
                 </div>
               </div>
             ) : selectedMatter.assignedStaff ? (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">Coordination Contact</h3>
-                <p className="text-sm">{selectedMatter.assignedStaff}</p>
+                <p className="break-words text-sm">{selectedMatter.assignedStaff}</p>
               </div>
             ) : null}
             {selectedMatter.assignments?.some((entry) => entry.type === 'field_partner') ? (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">Field Support Contact</h3>
                 <div className="space-y-1 text-sm">
                   {selectedMatter.assignments
                     .filter((entry) => entry.type === 'field_partner')
                     .map((entry) => (
-                      <p key={entry.id}>{entry.name}</p>
+                      <p key={entry.id} className="break-words">{entry.name}</p>
                     ))}
                 </div>
               </div>
             ) : null}
 
-            <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+            <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
               <h3 className="text-xs uppercase tracking-wider text-gray-400">Details</h3>
               <div className="space-y-1.5 text-xs text-gray-500">
-                <p>Expertise: {selectedMatter.expertiseArea}</p>
-                <p>Mode: {selectedMatter.consultationMode}</p>
+                <p className="break-words">Expertise: {selectedMatter.expertiseArea}</p>
+                <p className="break-words">Mode: {selectedMatter.consultationMode}</p>
                 <p>Created: {formatDate(selectedMatter.createdAt)}</p>
                 <p>Last Updated: {formatDate(selectedMatter.lastUpdated)}</p>
               </div>
             </div>
 
             {matterInvoices.length > 0 && (
-              <div className="space-y-2 rounded-xl bg-gray-50 p-4">
+              <div className="min-w-0 space-y-2 rounded-xl bg-gray-50 p-4">
                 <h3 className="text-xs uppercase tracking-wider text-gray-400">Invoices</h3>
                 {matterInvoices.map((invoice) => (
-                  <div key={invoice.id} className="flex items-center justify-between gap-3 text-xs">
+                  <div key={invoice.id} className="flex flex-col gap-2 text-xs sm:flex-row sm:items-center sm:justify-between">
                     <button
                       type="button"
                       onClick={() => onOpenInvoice(invoice.id)}
-                      className="font-mono text-left text-gray-700 transition hover:text-gray-900 hover:underline"
+                      className="break-all font-mono text-left text-gray-700 transition hover:text-gray-900 hover:underline"
                     >
                       {invoice.id}
                     </button>
-                    <span>{formatCurrency(invoice.totalAmount, invoice.currencyCode)}</span>
-                    <div className="flex items-center gap-2">
+                    <span className="shrink-0">{formatCurrency(invoice.totalAmount, invoice.currencyCode)}</span>
+                    <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge status={invoice.status} />
                       <button
                         type="button"

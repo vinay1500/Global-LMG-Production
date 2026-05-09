@@ -84,8 +84,14 @@ export const InvoiceDetailSection = ({
 
   const currencyCode = invoice.currencyCode || 'USD';
   const canPayOnline =
-    invoice.paymentOptions.onlineEnabled && invoice.amountDue > 0 && !['paid', 'void', 'draft'].includes(invoice.statusCode);
+    invoice.paymentOptions.onlineEnabled &&
+    invoice.paymentOptions.payable &&
+    invoice.amountDue > 0 &&
+    !['paid', 'void', 'draft'].includes(invoice.statusCode);
   const paymentAmount = selectedPaymentAmount ?? invoice.amountDue;
+  const onlinePaymentUnavailableMessage =
+    invoice.paymentOptions.paymentDisabledReason ||
+    'Online payment is not available for this invoice. Please contact billing support.';
 
   const handlePayOnline = async () => {
     setPaymentError(null);
@@ -189,7 +195,7 @@ export const InvoiceDetailSection = ({
                 <ReceiptIndianRupee className="h-4 w-4 text-gray-400" />
                 <h2 className="text-sm text-gray-500">Invoice Items</h2>
               </div>
-              <div className="overflow-hidden rounded-xl border border-gray-100">
+              <div className="overflow-x-auto rounded-xl border border-gray-100">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50/60">
@@ -359,20 +365,25 @@ export const InvoiceDetailSection = ({
                   ) : null}
 
                   {canPayOnline ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handlePayOnline();
-                      }}
-                      disabled={isPayingOnline}
-                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isPayingOnline ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
-                      Pay {formatCurrency(paymentAmount, currencyCode)}
-                    </button>
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handlePayOnline();
+                        }}
+                        disabled={isPayingOnline}
+                        className="flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isPayingOnline ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+                        Pay Online
+                      </button>
+                      <p className="text-xs text-gray-500">
+                        Secure online payment · {formatCurrency(paymentAmount, currencyCode)}
+                      </p>
+                    </div>
                   ) : (
                     <p className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600">
-                      Online payment is not available for this invoice right now.
+                      {onlinePaymentUnavailableMessage}
                     </p>
                   )}
 

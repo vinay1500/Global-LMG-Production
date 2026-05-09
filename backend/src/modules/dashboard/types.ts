@@ -153,8 +153,22 @@ export interface InvoiceItem {
   rate: number;
 }
 
+export interface InvoicePaymentOptions {
+  allowsPartial: boolean;
+  amountDue: number;
+  currencyCode: string;
+  minimumPaymentAmount: number;
+  offlineEnabled: boolean;
+  onlineEnabled: boolean;
+  payable: boolean;
+  paymentDisabledReason: string | null;
+  paymentProvider: 'razorpay' | null;
+  suggestedPaymentAmount: number;
+}
+
 export interface Invoice {
   amount: number;
+  amountDue: number;
   clientId: string;
   clientName: string;
   currencyCode: string;
@@ -167,6 +181,7 @@ export interface Invoice {
   matterRef: string;
   matterTitle: string;
   paidDate?: string;
+  paymentOptions: InvoicePaymentOptions;
   status: InvoiceStatus;
   tax: number;
   totalAmount: number;

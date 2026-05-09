@@ -154,28 +154,30 @@ export const DashboardOverviewSection = ({
         {activeMatters.slice(0, 3).map((matter) => (
           <div
             key={matter.id}
-            className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm transition hover:shadow-md"
+            className="max-w-full overflow-hidden rounded-xl border border-gray-100 bg-white p-5 shadow-sm transition hover:shadow-md"
           >
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
               <div className="min-w-0 flex-1">
                 <div className="mb-1 flex flex-wrap items-center gap-2">
-                  <h3 className="truncate text-sm">{matter.title}</h3>
-                  <span className="text-[11px] text-gray-400">{matter.referenceCode}</span>
+                  <h3 className="min-w-0 break-words text-sm sm:truncate">{matter.title}</h3>
+                  <span className="break-all text-[11px] text-gray-400">{matter.referenceCode}</span>
                   <StatusBadge status={matter.operationalStatus} />
                   <UrgencyDot urgency={matter.urgency} />
                 </div>
-                <p className="mb-3 text-xs text-gray-500">{matter.issueSummary}</p>
-                <div className="max-w-md">
-                  <LifecycleStepper stages={matter.stages} />
+                <p className="mb-3 break-words text-xs text-gray-500">{matter.issueSummary}</p>
+                <div className="max-w-full overflow-x-auto pb-2 sm:max-w-md">
+                  <div className="min-w-[24rem] sm:min-w-0">
+                    <LifecycleStepper stages={matter.stages} />
+                  </div>
                 </div>
                 {matter.clientVisibleNotes.length > 0 && (
-                  <p className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                  <p className="mt-3 break-words rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500">
                     <span className="text-gray-400">Latest:</span>{' '}
                     {matter.clientVisibleNotes[matter.clientVisibleNotes.length - 1]}
                   </p>
                 )}
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex min-w-0 flex-wrap gap-2 lg:justify-end">
                 <button
                   type="button"
                   onClick={() => onSelectMatter(matter)}
@@ -364,25 +366,27 @@ export const DashboardCasesSection = ({
         <div
           key={matter.id}
           onClick={() => onSelectMatter(matter)}
-          className="cursor-pointer rounded-xl border border-gray-100 bg-white p-5 shadow-sm transition hover:shadow-md"
+          className="max-w-full cursor-pointer overflow-hidden rounded-xl border border-gray-100 bg-white p-5 shadow-sm transition hover:shadow-md"
         >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
             <div className="min-w-0 flex-1">
               <div className="mb-1 flex flex-wrap items-center gap-2">
-                <h3 className="text-sm">{matter.title}</h3>
-                <span className="font-mono text-[11px] text-gray-400">{matter.referenceCode}</span>
+                <h3 className="min-w-0 break-words text-sm">{matter.title}</h3>
+                <span className="break-all font-mono text-[11px] text-gray-400">{matter.referenceCode}</span>
               </div>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <StatusBadge status={matter.operationalStatus} />
                 <StatusBadge status={matter.priority} />
                 <UrgencyDot urgency={matter.urgency} />
               </div>
-              <div className="max-w-sm">
-                <LifecycleStepper stages={matter.stages} compact />
+              <div className="max-w-full overflow-x-auto pb-1 sm:max-w-sm">
+                <div className="min-w-[18rem] sm:min-w-0">
+                  <LifecycleStepper stages={matter.stages} compact />
+                </div>
               </div>
             </div>
-            <div className="flex flex-shrink-0 flex-col gap-3 text-xs text-gray-500 sm:flex-row sm:items-center">
-              <div className="text-right">
+            <div className="flex flex-col gap-3 text-xs text-gray-500 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end lg:flex-shrink-0">
+              <div className="text-left sm:text-right">
                 <p>
                   {matter.selectedServices.length} service
                   {matter.selectedServices.length !== 1 ? 's' : ''}
@@ -390,7 +394,7 @@ export const DashboardCasesSection = ({
                 <p className="text-gray-400">Started {formatDate(matter.createdAt)}</p>
               </div>
               {matter.totalFee > 0 && (
-                <div className="text-right">
+                <div className="text-left sm:text-right">
                   <p>{formatCurrency(matter.totalFee, matter.currencyCode || 'USD')}</p>
                   {matter.dueAmount > 0 && (
                     <p className="text-amber-600">Due: {formatCurrency(matter.dueAmount, matter.currencyCode || 'USD')}</p>
@@ -637,7 +641,7 @@ export const DashboardBillingSection = ({
                     <StatusBadge status={invoice.status} />
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-1">
+                    <div className="flex flex-wrap gap-1">
                       <button
                         type="button"
                         onClick={() => onViewInvoice(invoice.id)}
@@ -660,7 +664,9 @@ export const DashboardBillingSection = ({
                           onClick={() => onPayInvoice(invoice.id)}
                           className="rounded bg-gray-900 px-2.5 py-1 text-[11px] text-white hover:bg-gray-800"
                         >
-                          Payment Info
+                          {invoice.paymentOptions?.onlineEnabled && invoice.amountDue > 0
+                            ? 'Pay Online'
+                            : 'Payment Info'}
                         </button>
                       )}
                     </div>

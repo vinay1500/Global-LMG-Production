@@ -17,6 +17,7 @@ import {
   type PricingFxSnapshot,
 } from '../pricing/fx.js';
 import { renderAndStoreInvoiceTemplateSnapshot } from '../domain/invoiceTemplateRendering.js';
+import { getInvoicePaymentOptions } from '../payments/razorpayService.js';
 import { buildStages, createEmptyDashboardSnapshot } from './helpers.js';
 import type {
   ChatMessage,
@@ -415,6 +416,12 @@ interface InvoiceRow extends RowDataPacket {
   subtotal_amount: string | number;
   tax_amount: string | number;
   total_amount: string | number;
+}
+
+interface InvoicePaymentOptionInstallmentRow extends RowDataPacket {
+  amount_remaining: string | number;
+  invoice_id: number;
+  status_code: string;
 }
 
 interface MatterSelectionRow extends RowDataPacket {
@@ -3196,37 +3203,60 @@ export class NormalizedDashboardRepository {
        GROUP BY pa.invoice_id`,
       invoiceIds
     );
+    const installments = await selectAll<InvoicePaymentOptionInstallmentRow>(
+      connection,
+      `SELECT invoice_id, amount_remaining, status_code
+       FROM invoice_installments
+       WHERE invoice_id IN (${placeholders})
+       ORDER BY invoice_id ASC, installment_no ASC`,
+      invoiceIds
+    );
 
-    return invoices.map((invoice) => ({
-      amount: toAmount(invoice.subtotal_amount),
-      clientId: clientPublicUserId,
-      clientName,
-      currencyCode: invoice.currency_code || 'USD',
-      discount: toAmount(invoice.discount_amount),
-      dueDate: String(invoice.due_date),
-      id: invoice.public_id,
-      issueDate: String(invoice.issue_date),
-      items: lines
-        .filter((line) => line.invoice_id === invoice.id)
-        .map(
-          (line) =>
-            ({
-              amount: toAmount(line.line_subtotal),
-              description: line.description,
-              quantity: toAmount(line.quantity),
-              rate: toAmount(line.rate),
-            }) satisfies InvoiceItem
-        ),
-      matterId: invoice.matter_public_id || '',
-      matterRef: invoice.matter_number || '',
-      matterTitle: invoice.matter_title || '',
-      paidDate: payments.find((payment) => Number(payment.invoice_id) === invoice.id)?.paid_at
-        ? toIso(payments.find((payment) => Number(payment.invoice_id) === invoice.id)?.paid_at)
-        : undefined,
-      status: invoice.status_code as Invoice['status'],
-      tax: toAmount(invoice.tax_amount),
-      totalAmount: toAmount(invoice.total_amount),
-    }));
+    return invoices.map((invoice) => {
+      const invoiceInstallments = installments.filter((entry) => Number(entry.invoice_id) === invoice.id);
+      const amountDue = toAmount(invoice.amount_due);
+
+      return {
+        amount: toAmount(invoice.subtotal_amount),
+        amountDue,
+        clientId: clientPublicUserId,
+        clientName,
+        currencyCode: invoice.currency_code || 'USD',
+        discount: toAmount(invoice.discount_amount),
+        dueDate: String(invoice.due_date),
+        id: invoice.public_id,
+        issueDate: String(invoice.issue_date),
+        items: lines
+          .filter((line) => line.invoice_id === invoice.id)
+          .map(
+            (line) =>
+              ({
+                amount: toAmount(line.line_subtotal),
+                description: line.description,
+                quantity: toAmount(line.quantity),
+                rate: toAmount(line.rate),
+              }) satisfies InvoiceItem
+          ),
+        matterId: invoice.matter_public_id || '',
+        matterRef: invoice.matter_number || '',
+        matterTitle: invoice.matter_title || '',
+        paidDate: payments.find((payment) => Number(payment.invoice_id) === invoice.id)?.paid_at
+          ? toIso(payments.find((payment) => Number(payment.invoice_id) === invoice.id)?.paid_at)
+          : undefined,
+        paymentOptions: getInvoicePaymentOptions({
+          amountDue,
+          currencyCode: invoice.currency_code || 'USD',
+          installments: invoiceInstallments.map((entry) => ({
+            amountRemaining: toAmount(entry.amount_remaining),
+            statusCode: entry.status_code,
+          })),
+          statusCode: invoice.status_code,
+        }),
+        status: invoice.status_code as Invoice['status'],
+        tax: toAmount(invoice.tax_amount),
+        totalAmount: toAmount(invoice.total_amount),
+      };
+    });
   }
 
   private async fetchPayments(

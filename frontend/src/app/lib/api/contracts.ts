@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ConsultationMode,
   Invoice,
+  InvoicePaymentOptions,
   Lead,
   Matter,
   MatterPackage,
@@ -341,15 +342,7 @@ export interface InvoiceDetailResponse {
   issueDate: string;
   lines: InvoiceLineSummaryResponse[];
   matterId: string | null;
-  paymentOptions: {
-    allowsPartial: boolean;
-    amountDue: number;
-    currencyCode: string;
-    minimumPaymentAmount: number;
-    offlineEnabled: boolean;
-    onlineEnabled: boolean;
-    suggestedPaymentAmount: number;
-  };
+  paymentOptions: InvoicePaymentOptions;
   statusCode: string;
   subtotalAmount: number;
   taxAmount: number;

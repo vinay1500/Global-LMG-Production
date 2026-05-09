@@ -245,6 +245,19 @@ export interface InvoiceInstallmentSummary {
   statusCode: string;
 }
 
+export interface InvoicePaymentOptions {
+  allowsPartial: boolean;
+  amountDue: number;
+  currencyCode: string;
+  minimumPaymentAmount: number;
+  offlineEnabled: boolean;
+  onlineEnabled: boolean;
+  payable: boolean;
+  paymentDisabledReason: string | null;
+  paymentProvider: 'razorpay' | null;
+  suggestedPaymentAmount: number;
+}
+
 export interface InvoiceSummary {
   amountDue: number;
   amountPaid: number;
@@ -288,15 +301,7 @@ export interface InvoiceDetail extends InvoiceSummary {
   documents: LinkedEntityReference[];
   installments: InvoiceInstallmentSummary[];
   lines: InvoiceLineSummary[];
-  paymentOptions: {
-    allowsPartial: boolean;
-    amountDue: number;
-    currencyCode: string;
-    minimumPaymentAmount: number;
-    offlineEnabled: boolean;
-    onlineEnabled: boolean;
-    suggestedPaymentAmount: number;
-  };
+  paymentOptions: InvoicePaymentOptions;
   subtotalAmount: number;
   taxAmount: number;
   template: {
