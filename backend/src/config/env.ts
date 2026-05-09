@@ -19,6 +19,14 @@ if (!rawEnv.API_JSON_BODY_LIMIT && rawEnv.JSON_BODY_LIMIT) {
   rawEnv.API_JSON_BODY_LIMIT = rawEnv.JSON_BODY_LIMIT;
 }
 
+if (!rawEnv.PUBLIC_WEB_ORIGIN && rawEnv.PUBLIC_WEB_ORIGINS) {
+  rawEnv.PUBLIC_WEB_ORIGIN = rawEnv.PUBLIC_WEB_ORIGINS.split(',')[0]?.trim();
+}
+
+if (!rawEnv.PUBLIC_WEB_ORIGINS) {
+  rawEnv.PUBLIC_WEB_ORIGINS = rawEnv.PUBLIC_WEB_ORIGIN || 'http://localhost:5173';
+}
+
 if (rawEnv.OBJECT_STORAGE_DRIVER) {
   rawEnv.DOCUMENT_STORAGE_DRIVER = rawEnv.OBJECT_STORAGE_DRIVER;
 }
@@ -59,6 +67,21 @@ const bodySizeLimit = z.preprocess((value) => {
 
   return value.trim().toLowerCase();
 }, z.string().regex(/^\d+(?:\.\d+)?(?:b|kb|mb)$/));
+
+const commaSeparatedUrlList = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return value;
+}, z.array(z.string().url()).min(1));
 
 const smsProviderMode = z.preprocess((value) => {
   if (typeof value !== 'string') {
@@ -158,7 +181,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
   API_JSON_BODY_LIMIT: bodySizeLimit.default('1mb'),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
   PUBLIC_WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
+  PUBLIC_WEB_ORIGINS: commaSeparatedUrlList,
   AUTH_STORE_MODE: z.enum(['mysql']).default('mysql'),
   DASHBOARD_STORE_MODE: z.enum(['mysql']).default('mysql'),
   HEALTHCHECK_REQUIRE_MYSQL: booleanFromEnv.default(true),
@@ -206,6 +231,8 @@ const envSchema = z.object({
   RAZORPAY_WEBHOOK_IP_ALLOWLIST: optionalString,
   RAZORPAY_ALLOWED_CURRENCIES: z.string().min(1).default('USD'),
   REQUEST_PAYMENT_DRAFT_EXPIRY_MINUTES: z.coerce.number().int().positive().default(30),
+  NOTIFICATION_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
+  NOTIFICATION_RETENTION_ONLY_DISMISSED: booleanFromEnv.default(true),
   PREVIEW_ACCOUNT_ENABLED: booleanFromEnv.default(false),
   PREVIEW_ACCOUNT_ID: z.string().min(1).default('user-1'),
   PREVIEW_ACCOUNT_NAME: z.string().min(1).default('Arjun Mehta'),
@@ -248,6 +275,13 @@ const envSchema = z.object({
 });
 
 const parsedEnv = envSchema.parse(rawEnv);
+
+export const isPlaceholderLikeSessionSecret = (value: string) =>
+  /(change[-_\s]?this|change[-_\s]?me|development|dev[-_\s]?secret|placeholder|replace[-_\s]?me|example|sample|test[-_\s]?secret|secret[-_\s]?key|password|changeme)/i.test(
+    value
+  ) ||
+  new Set(value.trim()).size < 12 ||
+  /^(.)\1+$/.test(value.trim());
 
 if (parsedEnv.APP_ENV !== 'development') {
   parsedEnv.FILE_SCAN_BLOCK_DOWNLOAD_UNTIL_CLEAN = true;
@@ -312,12 +346,16 @@ if (parsedEnv.APP_ENV !== 'development' && parsedEnv.PREVIEW_ACCOUNT_ENABLED) {
 }
 
 if (parsedEnv.APP_ENV === 'production') {
-  if (parsedEnv.AUTH_SESSION_SECRET === 'change-this-development-session-secret-now') {
-    throw new Error('Production AUTH_SESSION_SECRET must be replaced with a strong random secret.');
+  if (isPlaceholderLikeSessionSecret(parsedEnv.AUTH_SESSION_SECRET)) {
+    throw new Error('Production AUTH_SESSION_SECRET must be a strong non-placeholder secret.');
   }
 
   if (!parsedEnv.PUBLIC_WEB_ORIGIN.startsWith('https://')) {
     throw new Error('Production PUBLIC_WEB_ORIGIN must use https://');
+  }
+
+  if (parsedEnv.PUBLIC_WEB_ORIGINS.some((origin) => !origin.startsWith('https://'))) {
+    throw new Error('Production PUBLIC_WEB_ORIGINS entries must use https://');
   }
 
   if (

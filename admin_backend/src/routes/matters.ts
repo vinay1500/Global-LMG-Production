@@ -19,6 +19,7 @@ import {
   publishProposal,
   saveDraftProposal,
 } from '../modules/packages/service.js';
+import { parseOptionalSearchQuery, parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const mattersRouter = Router();
@@ -51,6 +52,20 @@ export const assignmentSchema = z
     visibleToClient: z.boolean().optional(),
   })
   .superRefine((payload, context) => {
+    const hasAssignee = Boolean(payload.internalUserId || payload.counselPartnerId);
+    const hasFee =
+      (payload.feeAgreedAmount ?? 0) > 0 ||
+      (payload.feePaidAmount ?? 0) > 0 ||
+      (payload.feeDueAmount ?? 0) > 0;
+
+    if (!hasAssignee && hasFee) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Select an assignee before adding assignment fees.',
+        path: ['internalUserId'],
+      });
+    }
+
     const agreed = payload.feeAgreedAmount;
 
     if (typeof agreed !== 'number') {
@@ -160,9 +175,8 @@ mattersRouter.get(
     await requireReadPermission(request, 'matter.view');
     response.json(
       await listMatters({
-        limit: Number(request.query.limit || 50),
-        offset: Number(request.query.offset || 0),
-        search: typeof request.query.search === 'string' ? request.query.search : undefined,
+        ...parsePaginationQuery(request.query),
+        search: parseOptionalSearchQuery(request.query.search),
       })
     );
   })

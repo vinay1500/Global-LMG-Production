@@ -280,8 +280,6 @@ interface DashboardNotificationsSectionProps {
   notifications: PortalNotificationResponse[];
   onOpenMessages: (threadId: string | null) => void;
   onOpenBilling: () => void;
-  onOpenCases: () => void;
-  onOpenDocuments: () => void;
   onActOnNotification: (
     notificationId: string,
     actionTarget: PortalNotificationResponse['actionTarget'],
@@ -296,8 +294,6 @@ export const DashboardNotificationsSection = ({
   notifications,
   onOpenMessages,
   onOpenBilling,
-  onOpenCases,
-  onOpenDocuments,
   onActOnNotification,
 }: DashboardNotificationsSectionProps) => {
   const billingNotifications = myInvoices

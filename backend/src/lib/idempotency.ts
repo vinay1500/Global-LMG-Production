@@ -94,6 +94,19 @@ export const getIdempotencyKey = (request: Request) => {
   return value;
 };
 
+export const requireIdempotencyKey = (
+  request: Request,
+  message = 'Idempotency-Key header is required for this operation.'
+) => {
+  const idempotencyKey = getIdempotencyKey(request);
+
+  if (!idempotencyKey) {
+    throw badRequest('idempotency_key_required', message);
+  }
+
+  return idempotencyKey;
+};
+
 const getReplayFromRow = <TBody>(row: IdempotencyRow): IdempotentJsonResult<TBody> => {
   if (!row.response_status_code) {
     throw conflict(

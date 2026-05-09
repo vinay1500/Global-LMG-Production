@@ -1,7 +1,6 @@
 import { expect, request, test, type APIRequestContext, type APIResponse, type Page } from '@playwright/test';
 
 const adminApiBase = process.env.E2E_ADMIN_API_BASE || 'http://127.0.0.1:3005/api/v1/admin';
-const adminWebBase = process.env.E2E_ADMIN_WEB_BASE || 'http://127.0.0.1:5174';
 const clientApiBase = process.env.E2E_CLIENT_API_BASE || 'http://127.0.0.1:3001/api/v1';
 const clientWebBase = process.env.E2E_CLIENT_WEB_BASE || 'http://127.0.0.1:5173';
 const runLiveE2e = process.env.E2E_RUN_LIVE === 'true';

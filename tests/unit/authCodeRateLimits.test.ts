@@ -75,6 +75,18 @@ describe('client auth code send and resend rate limits', () => {
     expect(block).toContain('identifier');
   });
 
+  it('rate-limits sign-up before account lookup or provider work', () => {
+    const block = extractBlock(
+      authService,
+      'async signUp(payload:',
+      'if (await store.getAccountByEmail(normalizedEmail))'
+    );
+
+    expect(block).toMatch(/consumeClientAuthRateLimits\(\s*'signup'/);
+    expect(block).toContain('normalizedEmail');
+    expect(block).toContain('context.ipAddress');
+  });
+
   it('rate-limits account email and phone change code routes with per-user and per-identifier buckets', () => {
     const helperBlock = extractBlock(
       meRoutes,

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/httpErrors.js';
+import { sendPrivateJsonWithEtag } from '../lib/httpCache.js';
 import { runIdempotentJson } from '../lib/idempotency.js';
 import {
   createInvoice,
@@ -10,6 +11,7 @@ import {
   sendInvoice,
 } from '../modules/billing/service.js';
 import { renderAdminInvoicePdf } from '../modules/billing/invoicePdf.js';
+import { parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const billingRouter = Router();
@@ -40,13 +42,13 @@ const recordPaymentSchema = z.object({
 billingRouter.get(
   '/billing/workspace',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'invoice.view');
-    response.json(
-      await getWorkspace({
-        limit: Number(request.query.limit || 50),
-        offset: Number(request.query.offset || 0),
-      })
-    );
+    const actor = await requireReadPermission(request, 'invoice.view');
+    const payload = await getWorkspace(parsePaginationQuery(request.query));
+    sendPrivateJsonWithEtag(request, response, {
+      actor,
+      payload,
+      scope: 'admin.billing.workspace',
+    });
   })
 );
 

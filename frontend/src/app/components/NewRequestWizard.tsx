@@ -197,6 +197,10 @@ const buildPreferredWindowSnapshot = (preferredDate: string, preferredTime: stri
 };
 
 const PRICING_UNAVAILABLE_MESSAGE = 'Pricing temporarily unavailable — please refresh in a minute';
+const EMPTY_SERVICES: RequestWizardService[] = [];
+const EMPTY_LEGAL_DOMAINS: RequestWizardPricingConfig['legalDomains'] = [];
+const EMPTY_CONSULTATION_MODES: RequestWizardConsultationMode[] = [];
+const EMPTY_URGENCY_OPTIONS: RequestWizardUrgencyOption[] = [];
 
 const hasRequiredPricingArray = <T,>(value: T[] | null | undefined): value is T[] =>
   Array.isArray(value) && value.length > 0;
@@ -387,10 +391,10 @@ export const NewRequestWizard: React.FC<NewRequestWizardProps> = ({
     };
   }, [isOpen, localCurrencyCode]);
 
-  const services = pricingConfig?.services || [];
-  const legalDomains = pricingConfig?.legalDomains || [];
-  const consultationModes = pricingConfig?.consultationModes || [];
-  const urgencyOptions = pricingConfig?.urgencyOptions || [];
+  const services = pricingConfig?.services ?? EMPTY_SERVICES;
+  const legalDomains = pricingConfig?.legalDomains ?? EMPTY_LEGAL_DOMAINS;
+  const consultationModes = pricingConfig?.consultationModes ?? EMPTY_CONSULTATION_MODES;
+  const urgencyOptions = pricingConfig?.urgencyOptions ?? EMPTY_URGENCY_OPTIONS;
   const isPricingUnavailable = Boolean(configError) || !pricingConfig;
   const selectedServices = useMemo(
     () => services.filter((service) => formData.services.includes(service.id)),

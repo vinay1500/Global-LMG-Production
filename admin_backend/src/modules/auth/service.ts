@@ -1489,11 +1489,15 @@ export const resetPassword = async (payload: {
   code: string;
   newPassword: string;
   token: string;
-}) => {
+}, context: { ipAddress?: string } = {}) => {
   await consumeAuthRateLimits([
     {
       key: `password-reset-confirm:token:${payload.token.trim()}`,
       maxAttempts: env.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    },
+    {
+      key: `password-reset-confirm:ip:${context.ipAddress || 'unknown'}`,
+      maxAttempts: env.AUTH_RATE_LIMIT_IP_MAX_ATTEMPTS,
     },
   ]);
 

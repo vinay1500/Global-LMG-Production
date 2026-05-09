@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, Tag, Search, ArrowRight } from 'lucide-react';
+import { Calendar, Search, ArrowRight } from 'lucide-react';
 import { ImageWithFallback } from '../components/shared/ImageWithFallback';
 import { Seo } from '../components/seo/Seo';
 import { PRESS_EMAIL, CONTACT_PHONE } from '../config/brand';

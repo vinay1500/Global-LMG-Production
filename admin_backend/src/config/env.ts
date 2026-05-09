@@ -15,6 +15,14 @@ if (!rawEnv.ADMIN_JSON_BODY_LIMIT && rawEnv.JSON_BODY_LIMIT) {
   rawEnv.ADMIN_JSON_BODY_LIMIT = rawEnv.JSON_BODY_LIMIT;
 }
 
+if (!rawEnv.PUBLIC_ADMIN_WEB_ORIGIN && rawEnv.PUBLIC_ADMIN_WEB_ORIGINS) {
+  rawEnv.PUBLIC_ADMIN_WEB_ORIGIN = rawEnv.PUBLIC_ADMIN_WEB_ORIGINS.split(',')[0]?.trim();
+}
+
+if (!rawEnv.PUBLIC_ADMIN_WEB_ORIGINS) {
+  rawEnv.PUBLIC_ADMIN_WEB_ORIGINS = rawEnv.PUBLIC_ADMIN_WEB_ORIGIN || 'http://localhost:5174';
+}
+
 if (rawEnv.OBJECT_STORAGE_DRIVER) {
   rawEnv.DOCUMENT_STORAGE_DRIVER = rawEnv.OBJECT_STORAGE_DRIVER;
 }
@@ -63,6 +71,21 @@ const bodySizeLimit = z.preprocess((value) => {
 
   return value.trim().toLowerCase();
 }, z.string().regex(/^\d+(?:\.\d+)?(?:b|kb|mb)$/));
+
+const commaSeparatedUrlList = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return value;
+}, z.array(z.string().url()).min(1));
 
 const mysqlSslMode = z.preprocess((value) => {
   if (typeof value !== 'string') {
@@ -184,11 +207,13 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3005),
   ADMIN_JSON_BODY_LIMIT: bodySizeLimit.default('2mb'),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
   PUBLIC_ADMIN_WEB_ORIGIN: z.string().url().default('http://localhost:5174'),
+  PUBLIC_ADMIN_WEB_ORIGINS: commaSeparatedUrlList,
   REQUEST_LOGGING_ENABLED: booleanFromEnv.default(true),
   REMEMBER_ME_TTL_DAYS: z.coerce.number().int().positive().default(30),
   MAX_ACTIVE_SESSIONS_PER_USER: z.coerce.number().int().positive().default(10),
-  REMINDER_PROCESS_BATCH_SIZE: z.coerce.number().int().positive().max(100).default(25),
+  REMINDER_PROCESS_BATCH_SIZE: z.coerce.number().int().positive().max(250).default(100),
   RESEND_API_KEY: optionalString,
   RESEND_WEBHOOK_SECRET: optionalString,
   RESEND_WEBHOOK_IP_ALLOWLIST: optionalString,
@@ -222,6 +247,10 @@ if (parsedEnv.APP_ENV !== 'development') {
 if (parsedEnv.APP_ENV === 'production') {
   if (!parsedEnv.PUBLIC_ADMIN_WEB_ORIGIN.startsWith('https://')) {
     throw new Error('Production PUBLIC_ADMIN_WEB_ORIGIN must use HTTPS.');
+  }
+
+  if (parsedEnv.PUBLIC_ADMIN_WEB_ORIGINS.some((origin) => !origin.startsWith('https://'))) {
+    throw new Error('Production PUBLIC_ADMIN_WEB_ORIGINS entries must use HTTPS.');
   }
 
   if (isPlaceholderLikeSessionSecret(parsedEnv.AUTH_SESSION_SECRET)) {

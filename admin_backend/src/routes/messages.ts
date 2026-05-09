@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/httpErrors.js';
+import { sendPrivateJsonWithEtag } from '../lib/httpCache.js';
 import { isMessageContentWithinLimit, sanitizeMessageContent } from '../lib/messageContent.js';
 import { archiveThread, createThread, getWorkspace, markThreadRead, replyToThread } from '../modules/messages/service.js';
+import { parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const messagesRouter = Router();
@@ -33,12 +35,12 @@ messagesRouter.get(
   '/messages/workspace',
   asyncHandler(async (request, response) => {
     const actor = await requireReadPermission(request, 'message.send');
-    response.json(
-      await getWorkspace(actor, {
-        limit: Number(request.query.limit || 50),
-        offset: Number(request.query.offset || 0),
-      })
-    );
+    const payload = await getWorkspace(actor, parsePaginationQuery(request.query));
+    sendPrivateJsonWithEtag(request, response, {
+      actor,
+      payload,
+      scope: 'admin.messages.workspace',
+    });
   })
 );
 

@@ -5315,4 +5315,74 @@ export const NORMALIZED_MIGRATIONS: SchemaMigrationDefinition[] = [
       `DEALLOCATE PREPARE alter_events_timezone_default_stmt`,
     ],
   },
+  {
+    id: '056-counsel-partner-expertise-foreign-keys',
+    description:
+      'Add explicit foreign keys and supporting indexes for counsel partner expertise taxonomy links.',
+    statements: [
+      `SET @has_idx_cpe_legal_domain := (
+         SELECT COUNT(*)
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE()
+           AND table_name = 'counsel_partner_expertise'
+           AND index_name = 'idx_counsel_partner_expertise_legal_domain'
+       )`,
+      `SET @add_idx_cpe_legal_domain_sql := IF(
+         @has_idx_cpe_legal_domain = 0,
+         'ALTER TABLE counsel_partner_expertise ADD INDEX idx_counsel_partner_expertise_legal_domain (legal_domain_id)',
+         'DO 0'
+       )`,
+      `PREPARE add_idx_cpe_legal_domain_stmt FROM @add_idx_cpe_legal_domain_sql`,
+      `EXECUTE add_idx_cpe_legal_domain_stmt`,
+      `DEALLOCATE PREPARE add_idx_cpe_legal_domain_stmt`,
+
+      `SET @has_fk_cpe_partner := (
+         SELECT COUNT(*)
+         FROM information_schema.referential_constraints
+         WHERE constraint_schema = DATABASE()
+           AND table_name = 'counsel_partner_expertise'
+           AND constraint_name = 'fk_cpe_partner'
+       )`,
+      `SET @add_fk_cpe_partner_sql := IF(
+         @has_fk_cpe_partner = 0,
+         'ALTER TABLE counsel_partner_expertise ADD CONSTRAINT fk_cpe_partner FOREIGN KEY (counsel_partner_id) REFERENCES counsel_partners (id) ON UPDATE CASCADE ON DELETE RESTRICT',
+         'DO 0'
+       )`,
+      `PREPARE add_fk_cpe_partner_stmt FROM @add_fk_cpe_partner_sql`,
+      `EXECUTE add_fk_cpe_partner_stmt`,
+      `DEALLOCATE PREPARE add_fk_cpe_partner_stmt`,
+
+      `SET @has_fk_cpe_legal_domain := (
+         SELECT COUNT(*)
+         FROM information_schema.referential_constraints
+         WHERE constraint_schema = DATABASE()
+           AND table_name = 'counsel_partner_expertise'
+           AND constraint_name = 'fk_cpe_legal_domain'
+       )`,
+      `SET @add_fk_cpe_legal_domain_sql := IF(
+         @has_fk_cpe_legal_domain = 0,
+         'ALTER TABLE counsel_partner_expertise ADD CONSTRAINT fk_cpe_legal_domain FOREIGN KEY (legal_domain_id) REFERENCES legal_domains (id) ON UPDATE CASCADE ON DELETE RESTRICT',
+         'DO 0'
+       )`,
+      `PREPARE add_fk_cpe_legal_domain_stmt FROM @add_fk_cpe_legal_domain_sql`,
+      `EXECUTE add_fk_cpe_legal_domain_stmt`,
+      `DEALLOCATE PREPARE add_fk_cpe_legal_domain_stmt`,
+
+      `SET @has_fk_cpe_service := (
+         SELECT COUNT(*)
+         FROM information_schema.referential_constraints
+         WHERE constraint_schema = DATABASE()
+           AND table_name = 'counsel_partner_expertise'
+           AND constraint_name = 'fk_cpe_service'
+       )`,
+      `SET @add_fk_cpe_service_sql := IF(
+         @has_fk_cpe_service = 0,
+         'ALTER TABLE counsel_partner_expertise ADD CONSTRAINT fk_cpe_service FOREIGN KEY (service_id) REFERENCES services (id) ON UPDATE CASCADE ON DELETE RESTRICT',
+         'DO 0'
+       )`,
+      `PREPARE add_fk_cpe_service_stmt FROM @add_fk_cpe_service_sql`,
+      `EXECUTE add_fk_cpe_service_stmt`,
+      `DEALLOCATE PREPARE add_fk_cpe_service_stmt`,
+    ],
+  },
 ];

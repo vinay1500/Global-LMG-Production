@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/httpErrors.js';
+import { sendPrivateJsonWithEtag } from '../lib/httpCache.js';
 import {
   approveRequest,
   convertRequest,
@@ -19,8 +20,12 @@ const decisionSchema = z.object({
 requestsRouter.get(
   '/requests/workspace',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'matter.view');
-    response.json(await getWorkspace());
+    const actor = await requireReadPermission(request, 'matter.view');
+    sendPrivateJsonWithEtag(request, response, {
+      actor,
+      payload: await getWorkspace(),
+      scope: 'admin.requests.workspace',
+    });
   })
 );
 

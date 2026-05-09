@@ -43,6 +43,7 @@ type EventStateRow = RowDataPacket & {
   id: number;
   joinUrl: string | null;
   locationText: string | null;
+  matterClientAccountId: number | null;
   matterId: number | null;
   meetConferenceId: string | null;
   meetingProviderCode: string;
@@ -97,6 +98,21 @@ const subtractMinutesFromMysqlDateTime = (dateTime: string, minutes: number) => 
 const isFutureMysqlDateTime = (dateTime: string) =>
   new Date(`${dateTime.replace(' ', 'T')}`).getTime() > Date.now();
 
+export const assertEventMatterBelongsToClient = (input: {
+  clientAccountId: number;
+  matterClientAccountId: number | null;
+}) => {
+  if (
+    input.matterClientAccountId === null ||
+    Number(input.clientAccountId) !== Number(input.matterClientAccountId)
+  ) {
+    throw badRequest(
+      'event_client_matter_mismatch',
+      'The selected matter does not belong to the selected client.'
+    );
+  }
+};
+
 const resolveEventTimezoneName = async (
   timezone: string | undefined,
   executor: QueryExecutor
@@ -115,35 +131,37 @@ const resolveEventTimezoneName = async (
 const resolveEventByPublicId = async (eventPublicId: string, executor: QueryExecutor) => {
   const rows = await queryRows<EventStateRow>(
     `SELECT
-       id,
-       public_id AS publicId,
-       client_account_id AS clientAccountId,
-       matter_id AS matterId,
-       title,
-       event_type_code AS eventTypeCode,
-       status_code AS statusCode,
-       scheduled_start_at AS scheduledStartAt,
-       scheduled_end_at AS scheduledEndAt,
-       TIMESTAMPDIFF(MINUTE, scheduled_start_at, scheduled_end_at) AS durationMinutes,
-       timezone_name AS timezoneName,
-       mode_code AS modeCode,
-       location_text AS locationText,
-       meeting_provider_code AS meetingProviderCode,
-       external_meeting_id AS externalMeetingId,
-       join_url AS joinUrl,
-       COALESCE(calendar_sync_status_code, 'local') AS calendarSyncStatusCode,
-       calendar_sync_error_text AS calendarSyncErrorText,
-       meet_conference_id AS meetConferenceId,
-       calendar_owner_user_id AS calendarOwnerUserId,
-       calendar_owner_email AS calendarOwnerEmail,
-       client_invite_mode_code AS clientInviteModeCode,
-       google_attendee_status_code AS googleAttendeeStatusCode,
-       client_visible_flag AS visibleToClient,
-       notes,
-       created_by_user_id AS createdByUserId,
-       cancelled_at AS cancelledAt
-     FROM events
-     WHERE public_id = ?
+       e.id,
+       e.public_id AS publicId,
+       e.client_account_id AS clientAccountId,
+       e.matter_id AS matterId,
+       e.title,
+       e.event_type_code AS eventTypeCode,
+       e.status_code AS statusCode,
+       e.scheduled_start_at AS scheduledStartAt,
+       e.scheduled_end_at AS scheduledEndAt,
+       TIMESTAMPDIFF(MINUTE, e.scheduled_start_at, e.scheduled_end_at) AS durationMinutes,
+       e.timezone_name AS timezoneName,
+       e.mode_code AS modeCode,
+       e.location_text AS locationText,
+       e.meeting_provider_code AS meetingProviderCode,
+       e.external_meeting_id AS externalMeetingId,
+       e.join_url AS joinUrl,
+       matter.client_account_id AS matterClientAccountId,
+       COALESCE(e.calendar_sync_status_code, 'local') AS calendarSyncStatusCode,
+       e.calendar_sync_error_text AS calendarSyncErrorText,
+       e.meet_conference_id AS meetConferenceId,
+       e.calendar_owner_user_id AS calendarOwnerUserId,
+       e.calendar_owner_email AS calendarOwnerEmail,
+       e.client_invite_mode_code AS clientInviteModeCode,
+       e.google_attendee_status_code AS googleAttendeeStatusCode,
+       e.client_visible_flag AS visibleToClient,
+       e.notes,
+       e.created_by_user_id AS createdByUserId,
+       e.cancelled_at AS cancelledAt
+     FROM events e
+     LEFT JOIN matters matter ON matter.id = e.matter_id
+     WHERE e.public_id = ?
      LIMIT 1
      FOR UPDATE`,
     [eventPublicId],
@@ -578,15 +596,23 @@ export const createEvent = async (
     const matter = payload.matterId
       ? await resolveMatterByPublicId(payload.matterId, connection)
       : null;
-    const clientAccount =
-      payload.clientAccountId && !matter
-        ? await resolveClientAccountByPublicId(payload.clientAccountId, connection)
-        : matter
-          ? { id: matter.clientAccountId }
-          : null;
+    const explicitClientAccount = payload.clientAccountId
+      ? await resolveClientAccountByPublicId(payload.clientAccountId, connection)
+      : null;
+    const clientAccount = explicitClientAccount || (matter ? { id: matter.clientAccountId } : null);
 
     if (!clientAccount) {
-      throw new Error('Client account is required to create an event.');
+      throw badRequest(
+        'event_context_required',
+        'Either matterId or clientAccountId is required to create an event.'
+      );
+    }
+
+    if (matter) {
+      assertEventMatterBelongsToClient({
+        clientAccountId: clientAccount.id,
+        matterClientAccountId: matter.clientAccountId,
+      });
     }
 
     const scheduledStartAt = toMysqlDateTime(payload.date, payload.time);
@@ -766,6 +792,16 @@ export const updateEvent = async (
           : { id: event.clientAccountId };
     const nextMatterId =
       payload.matterId === undefined ? event.matterId : matter ? matter.id : null;
+    const nextMatterClientAccountId =
+      payload.matterId === undefined ? event.matterClientAccountId : matter?.clientAccountId ?? null;
+
+    if (nextMatterId) {
+      assertEventMatterBelongsToClient({
+        clientAccountId: clientAccount.id,
+        matterClientAccountId: nextMatterClientAccountId,
+      });
+    }
+
     const nextDate = payload.date || datePart(event.scheduledStartAt);
     const nextTime = payload.time || timePart(event.scheduledStartAt);
     const nextStartAt = toMysqlDateTime(nextDate, nextTime);

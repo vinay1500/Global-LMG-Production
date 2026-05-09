@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { GraduationCap, Briefcase, Users, MapPin, Clock, ArrowRight } from 'lucide-react';
+import { GraduationCap, Briefcase, Users, MapPin, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { ImageWithFallback } from '../components/shared/ImageWithFallback';
 import { Seo } from '../components/seo/Seo';

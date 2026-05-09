@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/httpErrors.js';
 import { runIdempotentJson } from '../lib/idempotency.js';
 import { createClient, getClientWorkspace, listClients } from '../modules/clients/service.js';
+import { parseOptionalSearchQuery, parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const clientsRouter = Router();
@@ -25,9 +26,8 @@ clientsRouter.get(
     await requireReadPermission(request, 'client_account.view');
     response.json(
       await listClients({
-        limit: Number(request.query.limit || 50),
-        offset: Number(request.query.offset || 0),
-        search: typeof request.query.search === 'string' ? request.query.search : undefined,
+        ...parsePaginationQuery(request.query),
+        search: parseOptionalSearchQuery(request.query.search),
       })
     );
   })

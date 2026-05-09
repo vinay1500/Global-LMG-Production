@@ -8,12 +8,36 @@ import { initSentry, sentryErrorHandler } from './lib/sentry.js';
 import { apiRouter } from './routes/index.js';
 import { webhookRouter } from './routes/webhooks.js';
 
+export const CORS_ALLOWED_HEADERS = [
+  'content-type',
+  'x-csrf-token',
+  'idempotency-key',
+  'sentry-trace',
+  'baggage',
+];
+
+export const createCorsOriginDelegate = (allowedOrigins: string[]) => {
+  const allowedOriginSet = new Set(allowedOrigins);
+
+  return (
+    origin: string | undefined,
+    callback: (error: Error | null, origin?: boolean | string) => void
+  ) => {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, allowedOriginSet.has(origin) ? origin : false);
+  };
+};
+
 export const createApp = () => {
   initSentry();
   const app = express();
 
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
   app.use(requestContextMiddleware);
   app.use(requestLoggingMiddleware);
   app.use(
@@ -25,9 +49,10 @@ export const createApp = () => {
   );
   app.use(
     cors({
+      allowedHeaders: CORS_ALLOWED_HEADERS,
       credentials: true,
       exposedHeaders: ['content-disposition'],
-      origin: env.PUBLIC_ADMIN_WEB_ORIGIN,
+      origin: createCorsOriginDelegate(env.PUBLIC_ADMIN_WEB_ORIGINS),
     })
   );
   app.use('/api/v1/webhooks', webhookRouter);

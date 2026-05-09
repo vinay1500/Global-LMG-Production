@@ -215,6 +215,21 @@ describe('security helper hardening', () => {
     expect(warningSpy.mock.calls[0]?.[0]).toContain('security_event.record_failed');
     expect(warningSpy.mock.calls[0]?.[0]).toContain('unit.security_failure');
   });
+
+  it('rejects placeholder-like backend AUTH_SESSION_SECRET values in production config', async () => {
+    vi.resetModules();
+    process.env.APP_ENV = 'production';
+    process.env.AUTH_SESSION_SECRET = 'placeholder-placeholder-placeholder-123456';
+    process.env.PUBLIC_WEB_ORIGIN = 'https://www.globallmg.example';
+    process.env.EMAIL_PROVIDER_MODE = 'disabled';
+    process.env.SMS_PROVIDER_MODE = 'disabled';
+    process.env.GOOGLE_AUTH_MODE = 'disabled';
+    process.env.PAYMENT_PROVIDER_MODE = 'disabled';
+
+    await expect(import('../../backend/src/config/env.js')).rejects.toThrow(
+      'Production AUTH_SESSION_SECRET must be a strong non-placeholder secret.'
+    );
+  });
 });
 
 describe('production env validator auth/session checks', () => {

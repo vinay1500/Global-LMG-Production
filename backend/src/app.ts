@@ -16,12 +16,36 @@ const captureWebhookRawBody = (request: unknown, _response: unknown, buffer: Buf
   }
 };
 
+export const CORS_ALLOWED_HEADERS = [
+  'content-type',
+  'x-csrf-token',
+  'idempotency-key',
+  'sentry-trace',
+  'baggage',
+];
+
+export const createCorsOriginDelegate = (allowedOrigins: string[]) => {
+  const allowedOriginSet = new Set(allowedOrigins);
+
+  return (
+    origin: string | undefined,
+    callback: (error: Error | null, origin?: boolean | string) => void
+  ) => {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, allowedOriginSet.has(origin) ? origin : false);
+  };
+};
+
 export const createApp = () => {
   initSentry();
   const app = express();
 
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
   app.use(requestContextMiddleware);
   app.use(requestLoggingMiddleware);
 
@@ -34,8 +58,9 @@ export const createApp = () => {
   );
   app.use(
     cors({
+      allowedHeaders: CORS_ALLOWED_HEADERS,
       credentials: true,
-      origin: env.PUBLIC_WEB_ORIGIN,
+      origin: createCorsOriginDelegate(env.PUBLIC_WEB_ORIGINS),
     })
   );
   app.use(express.json({ limit: env.API_JSON_BODY_LIMIT, verify: captureWebhookRawBody }));

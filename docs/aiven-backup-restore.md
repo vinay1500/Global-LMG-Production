@@ -1,6 +1,6 @@
 # Aiven Backup and Restore Runbook
 
-Last updated: 2026-05-07
+Last updated: 2026-05-09
 
 Scope: MySQL data for Global LMG client API and admin API. This runbook covers Aiven-managed backups, point-in-time recovery, test restores, verification, and recovery objectives. Do not store database passwords, CA certificates, dumps, or restore artifacts in git.
 
@@ -67,6 +67,7 @@ CLI equivalent, if the Aiven CLI is installed and authenticated:
 
 ```bash
 # Example only. Confirm exact service/project names in Aiven first.
+command -v aiven
 aiven service list
 aiven service get <prod-mysql-service>
 aiven service create global-lmg-restore-drill-YYYYMMDD \
@@ -90,11 +91,11 @@ UNION ALL SELECT 'client_accounts', COUNT(*) FROM client_accounts
 UNION ALL SELECT 'matters', COUNT(*) FROM matters
 UNION ALL SELECT 'service_requests', COUNT(*) FROM service_requests
 UNION ALL SELECT 'invoices', COUNT(*) FROM invoices
-UNION ALL SELECT 'invoice_line_items', COUNT(*) FROM invoice_line_items
+UNION ALL SELECT 'invoice_lines', COUNT(*) FROM invoice_lines
 UNION ALL SELECT 'documents', COUNT(*) FROM documents
 UNION ALL SELECT 'document_versions', COUNT(*) FROM document_versions
 UNION ALL SELECT 'messages', COUNT(*) FROM messages
-UNION ALL SELECT 'message_threads', COUNT(*) FROM message_threads
+UNION ALL SELECT 'conversation_threads', COUNT(*) FROM conversation_threads
 UNION ALL SELECT 'events', COUNT(*) FROM events
 UNION ALL SELECT 'event_reminders', COUNT(*) FROM event_reminders
 UNION ALL SELECT 'audit_events', COUNT(*) FROM audit_events
@@ -108,15 +109,15 @@ SELECT MAX(created_at) AS newest_user FROM users;
 SELECT MAX(created_at) AS newest_invoice FROM invoices;
 SELECT MAX(created_at) AS newest_document_version FROM document_versions;
 SELECT MAX(occurred_at) AS newest_audit_event FROM audit_events;
-SELECT COUNT(*) AS pending_migrations FROM schema_migrations WHERE applied_at IS NULL;
+SELECT COUNT(*) AS applied_migrations FROM schema_migrations;
 ```
 
 Schema migration check:
 
 ```sql
-SELECT migration_id, checksum, applied_at
+SELECT id, checksum, executed_at
 FROM schema_migrations
-ORDER BY applied_at DESC
+ORDER BY executed_at DESC
 LIMIT 10;
 ```
 
@@ -157,6 +158,35 @@ Only restore or switch production traffic after:
 6. Rollback communication is ready for internal team and affected clients.
 
 ## Restore Drill Record
+
+Date: 2026-05-09
+
+Result: Blocked before live Aiven restore; no provider infrastructure was
+created, mutated, or destroyed.
+
+What was checked:
+
+- Local Aiven CLI commands `aiven` and `avn` were not installed or not on
+  `PATH`.
+- No Aiven Console session, project name, source service name, or disposable
+  restore target was available in the workspace context.
+- The currently configured MySQL service was reachable for read-only checks.
+- `SHOW VARIABLES LIKE 'max_connections'` returned `76` for the currently
+  configured MySQL service.
+- Current example pool sizing of one client API instance plus one admin API
+  instance at `MYSQL_CONNECTION_LIMIT=20` each reserves 40 app connections,
+  below the 70% budget of 53 connections for this service.
+- No restore was attempted because creating an Aiven restore target requires an
+  authenticated operator and an explicitly disposable service target.
+
+Next required action:
+
+1. Confirm the launch source service name and Aiven project in the Console.
+2. Install/authenticate Aiven CLI, or run the restore through Aiven Console.
+3. Create a disposable restore target from a recent backup/PITR point.
+4. Connect with temporary env files outside git.
+5. Run the table-count and app health verification above.
+6. Destroy the restore target and record RTO/RPO here.
 
 Date: 2026-05-07
 

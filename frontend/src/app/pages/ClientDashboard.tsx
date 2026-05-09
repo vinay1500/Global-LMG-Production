@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { AnimatePresence } from 'motion/react';
 import {
@@ -17,7 +17,7 @@ import {
   Shield,
 } from 'lucide-react';
 import { Seo } from '../components/seo/Seo';
-import { NewRequestWizard, type RequestData } from '../components/NewRequestWizard';
+import type { RequestData } from '../components/NewRequestWizard';
 import {
   DashboardBillingSection,
   DashboardCasesSection,
@@ -37,6 +37,10 @@ import type { ClientAccountSettingsResponse, InvoiceDetailResponse } from '../li
 import { dashboardApi } from '../lib/api/dashboard';
 import { uploadsApi } from '../lib/api/uploads';
 import { buildWebPageJsonLd } from '../seo/jsonLd';
+
+const NewRequestWizard = lazy(async () => ({
+  default: (await import('../components/NewRequestWizard')).NewRequestWizard,
+}));
 
 type RazorpayCheckoutResponse = {
   razorpay_order_id: string;
@@ -127,6 +131,23 @@ const SIDEBAR_TABS = [
 
 const isDashboardTabId = (value: string | null): value is DashboardTabId =>
   Boolean(value && DASHBOARD_TAB_IDS.includes(value as DashboardTabId));
+
+const RequestWizardLoadingFallback = () => (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm"
+    aria-hidden="true"
+  >
+    <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+      <div className="h-4 w-32 rounded-full bg-gray-100 animate-pulse" />
+      <div className="mt-5 h-10 max-w-md rounded-xl bg-gray-100 animate-pulse" />
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
+        <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
+      </div>
+      <div className="mt-5 h-11 rounded-xl bg-gray-900/10 animate-pulse" />
+    </div>
+  </div>
+);
 
 export const ClientDashboard = () => {
   const { signOut } = useAuth();
@@ -777,8 +798,6 @@ export const ClientDashboard = () => {
             notifications={notifications}
             onOpenMessages={handleOpenMessages}
             onOpenBilling={handleOpenBilling}
-            onOpenCases={() => handleTabChange('cases')}
-            onOpenDocuments={handleOpenDocuments}
             onActOnNotification={(notificationId, actionTarget, threadId) => {
               void handleNotificationAction(notificationId, async () => {
                 switch (actionTarget) {
@@ -1016,19 +1035,23 @@ export const ClientDashboard = () => {
       {/* The request wizard remains modal-based so it can be opened from multiple dashboard panels. */}
       <AnimatePresence>
         {showNewRequest && (
-          <NewRequestWizard
-            isOpen={showNewRequest}
-            onClose={() => setShowNewRequest(false)}
-            onOpenSettings={() => {
-              setShowNewRequest(false);
-              handleTabChange('settings');
-            }}
-            onSubmit={handleNewRequestSubmit}
-            userName={accountSettings?.account.name || user.name}
-            userEmail={accountSettings?.account.email || user.email}
-            userMobile={accountSettings?.account.mobileNumber || accountSettings?.account.phone || user.phone}
-            billingCountryCode={accountSettings?.account.address.countryCode || user.countryCode}
-          />
+          <Suspense fallback={<RequestWizardLoadingFallback />}>
+            <NewRequestWizard
+              isOpen={showNewRequest}
+              onClose={() => setShowNewRequest(false)}
+              onOpenSettings={() => {
+                setShowNewRequest(false);
+                handleTabChange('settings');
+              }}
+              onSubmit={handleNewRequestSubmit}
+              userName={accountSettings?.account.name || user.name}
+              userEmail={accountSettings?.account.email || user.email}
+              userMobile={
+                accountSettings?.account.mobileNumber || accountSettings?.account.phone || user.phone
+              }
+              billingCountryCode={accountSettings?.account.address.countryCode || user.countryCode}
+            />
+          </Suspense>
         )}
       </AnimatePresence>
     </div>

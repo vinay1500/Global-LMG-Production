@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type GoogleCalendarClientModule =
   typeof import('../../admin_backend/src/modules/events/googleCalendarClient.js');
+type AdminHealthModule = typeof import('../../admin_backend/src/routes/health.js');
 
 const originalEnv = { ...process.env };
 const fixedNowSeconds = 1_779_000_000;
@@ -50,6 +51,21 @@ const loadGoogleCalendarClient = async (
   return (await import(
     '../../admin_backend/src/modules/events/googleCalendarClient.js'
   )) as GoogleCalendarClientModule;
+};
+
+const loadAdminHealth = async (
+  overrides: NodeJS.ProcessEnv = {},
+  unsetEnv: string[] = [],
+) => {
+  vi.resetModules();
+
+  const nextEnv = safeBaseEnv(overrides);
+  for (const key of unsetEnv) {
+    delete nextEnv[key];
+  }
+  setProcessEnv(nextEnv);
+
+  return (await import('../../admin_backend/src/routes/health.js')) as AdminHealthModule;
 };
 
 const decodeJwtJson = <TValue>(segment: string) =>
@@ -221,6 +237,49 @@ describe('Google Calendar service-account JWT helpers', () => {
       calendarId: 'primary',
       defaultedToPrimary: true,
       source: 'workspace_delegation_primary',
+    });
+  });
+});
+
+describe('Google Calendar readiness', () => {
+  it('does not block readiness when Calendar sync is disabled', async () => {
+    const health = await loadAdminHealth({ CALENDAR_SYNC_MODE: 'disabled' });
+
+    expect(health.getCalendarReadiness()).toEqual({
+      configured: false,
+      ready: true,
+      status: 'disabled',
+    });
+  });
+
+  it('marks readiness degraded when Google Calendar sync is enabled but credentials are missing', async () => {
+    const health = await loadAdminHealth(
+      { CALENDAR_SYNC_MODE: 'google' },
+      [
+        'GOOGLE_CALENDAR_SERVICE_ACCOUNT_EMAIL',
+        'GOOGLE_CALENDAR_SERVICE_ACCOUNT_PRIVATE_KEY',
+      ],
+    );
+
+    expect(health.getCalendarReadiness()).toEqual({
+      configured: false,
+      ready: false,
+      status: 'calendar_config_incomplete',
+    });
+  });
+
+  it('marks Calendar readiness ok when Google Calendar sync config is complete', async () => {
+    const health = await loadAdminHealth({
+      CALENDAR_SYNC_MODE: 'google',
+      GOOGLE_CALENDAR_SERVICE_ACCOUNT_EMAIL: 'calendar-service-account@example.iam.gserviceaccount.com',
+      GOOGLE_CALENDAR_SERVICE_ACCOUNT_PRIVATE_KEY:
+        '-----BEGIN PRIVATE KEY-----\\ntest-key\\n-----END PRIVATE KEY-----',
+    });
+
+    expect(health.getCalendarReadiness()).toEqual({
+      configured: true,
+      ready: true,
+      status: 'ok',
     });
   });
 });

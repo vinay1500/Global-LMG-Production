@@ -385,6 +385,31 @@ describe.each([
     expect(result.body).toEqual({ calls: 2 });
   });
 
+  it('does not replay the same key across different actors', async () => {
+    const { module } = await loadTarget(target);
+    let calls = 0;
+
+    const operation = async () => {
+      calls += 1;
+      return { calls };
+    };
+
+    await runOperation(module, {
+      actorKey: 'actor-a',
+      idempotencyKey: 'idem-shared-operator-key',
+      operation,
+    });
+    const result = await runOperation(module, {
+      actorKey: 'actor-b',
+      idempotencyKey: 'idem-shared-operator-key',
+      operation,
+    });
+
+    expect(calls).toBe(2);
+    expect(result.replayed).toBe(false);
+    expect(result.body).toEqual({ calls: 2 });
+  });
+
   it('rejects the same key and scope with a different fingerprint', async () => {
     const { module } = await loadTarget(target);
     let calls = 0;
@@ -442,6 +467,30 @@ describe.each([
     expect([...pool.rows.values()][0]).toMatchObject({
       responseBodyJson: JSON.stringify({ recovered: true }),
       statusCode: 'completed',
+    });
+  });
+});
+
+describe('client dashboard idempotency requirements', () => {
+  it('rejects request submission helpers without an explicit Idempotency-Key', async () => {
+    const { module } = await loadTarget('backend');
+    const request = {
+      header: () => undefined,
+    };
+
+    let thrown: unknown;
+    try {
+      module.requireIdempotencyKey(
+        request as never,
+        'Idempotency-Key header is required to submit a request.'
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      code: 'idempotency_key_required',
+      statusCode: 400,
     });
   });
 });

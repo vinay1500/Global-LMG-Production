@@ -25,8 +25,18 @@ This file maps the database structure used across `backend`, `admin_backend`, `f
 
 - Current normalized schema: all active tables below.
 - Historical-only / dropped schema: early `dashboard_*`, `auth_accounts`, legacy `auth_sessions`, `auth_flows_legacy_pre_009`, and `stored_uploads` appear only in historical migrations. They were removed from the active schema by migrations `051-drop-dead-legacy-tables` and `052-drop-stored-uploads-if-unused`.
-- Low-usage but defined normalized tables: `security_events`, `subscription_plans`, `subscription_plan_services`, `subscriptions`, `event_reminders`, and `schema_migrations` exist in schema, but current runtime code has little or no direct usage outside migration/bootstrap paths.
-- Important modeling gap: `counsel_partner_expertise` has ID columns that imply relationships to `counsel_partners`, `legal_domains`, and `services`, but no foreign keys are declared in the migration file.
+- Low-usage but defined normalized tables: `security_events` and
+  `schema_migrations` exist in schema, but current runtime code has little or
+  no direct usage outside migration/bootstrap paths.
+- Deferred subscription feature tables: `subscription_plans`,
+  `subscription_plan_services`, and `subscriptions` are retained as reserved
+  schema for a possible future subscription billing model. Current runtime code
+  stores nullable invoice links (`invoices.subscription_id` and
+  `invoice_lines.subscription_plan_id`) but does not create or manage
+  subscriptions.
+- Historical country pricing tables remain for admin/reference compatibility,
+  but active request quote, invoice, and payment calculations are USD-only after
+  migration `045-usd-official-currency-simplification`.
 
 ## Table Catalog
 
@@ -582,6 +592,12 @@ Runtime references outside migrations: 13 (`backend/src/modules/auth/mysqlAuthSt
 - [INDEX] INDEX idx_client_accounts_owner (owner_user_id)
 - [FK] CONSTRAINT fk_client_accounts_owner FOREIGN KEY (owner_user_id) REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
 
+`owner_user_id` is nullable by design because the owner user may be removed
+while the client account and legal/billing records remain. Admin list/detail
+views use `LEFT JOIN` and display `Unassigned`; client portal access is resolved
+through active `client_account_contacts` rows with `portal_access_enabled=1`,
+not through this nullable owner field.
+
 #### client_account_contacts
 
 Source status: active normalized schema  
@@ -986,6 +1002,29 @@ Runtime references outside migrations: 2 (`backend/src/modules/dashboard/normali
 - [FK] CONSTRAINT fk_pricing_consultation_mode_rules_mode FOREIGN KEY (consultation_mode_code) REFERENCES consultation_modes (code) ON UPDATE CASCADE ON DELETE RESTRICT
 - [CHECK] CONSTRAINT chk_pricing_consultation_mode_rules_value CHECK (surcharge_value >= 0)
 
+#### country_pricing_overrides
+
+Source status: historical/display-reference schema
+Runtime references outside migrations: admin settings reads/writes, client
+country context lookup, and FX refresh target discovery.
+
+This table is retained for country context and local-currency display settings,
+but it no longer drives official payable amounts. After migration
+`045-usd-official-currency-simplification`, active rows are normalized to USD
+with multiplier `1.000000`; request quote, invoice, payment transaction, and
+Razorpay order amounts use USD.
+
+#### pricing_country_price_overrides
+
+Source status: historical/deprecated official-pricing override schema
+Runtime references outside migrations: admin settings reads/writes and inactive
+legacy lookup helpers.
+
+Migration `045-usd-official-currency-simplification` archives active exact
+country price overrides. Current request quote calculation intentionally passes
+an empty override map and returns base USD prices, so this table must not be
+used as an official payable-amount source without a new product/tax decision.
+
 #### tax_rates
 
 Source status: active normalized schema  
@@ -1036,8 +1075,8 @@ Runtime references outside migrations: 2 (`backend/src/modules/pricing/fx.ts`, `
 
 #### subscription_plans
 
-Source status: active normalized schema  
-Runtime references outside migrations: 0
+Source status: reserved/deferred subscription feature schema
+Runtime references outside migrations: 0 direct table DML; invoice line DTOs expose nullable `subscriptionPlanId`.
 
 **Columns**
 
@@ -1066,8 +1105,8 @@ Runtime references outside migrations: 0
 
 #### subscription_plan_services
 
-Source status: active normalized schema  
-Runtime references outside migrations: 0
+Source status: reserved/deferred subscription feature schema
+Runtime references outside migrations: 0 direct table DML.
 
 **Columns**
 
@@ -1739,8 +1778,14 @@ Runtime references outside migrations: 1 (`backend/src/modules/domain/repository
 
 #### event_reminders
 
-Source status: active normalized schema  
-Runtime references outside migrations: 0
+Source status: active normalized schema
+Runtime references outside migrations: active reminder workflow in
+`admin_backend/src/modules/events/service.ts`,
+`admin_backend/src/modules/reminders/service.ts`,
+`admin_backend/src/scripts/processReminders.ts`,
+`admin_backend/src/modules/dashboard/service.ts`,
+`admin_backend/src/modules/tasks/service.ts`, and
+`admin_backend/src/modules/reports/service.ts`.
 
 **Columns**
 
@@ -1933,8 +1978,8 @@ Runtime references outside migrations: 1 (`admin_backend/src/modules/shared.ts`)
 
 #### subscriptions
 
-Source status: active normalized schema  
-Runtime references outside migrations: 0
+Source status: reserved/deferred subscription feature schema
+Runtime references outside migrations: 0 direct table DML; invoices retain nullable `subscription_id` for future compatibility.
 
 **Columns**
 

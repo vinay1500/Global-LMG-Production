@@ -193,6 +193,12 @@ Retention:
 - Install `pm2-logrotate`.
 - Keep at least 14 days in beta and 30 days in production.
 - Ship logs to a central store when public traffic begins.
+- The weekly retention cron also prunes old dismissed portal/admin
+  notifications. Default policy is conservative:
+  `NOTIFICATION_RETENTION_DAYS=180` and
+  `NOTIFICATION_RETENTION_ONLY_DISMISSED=true`, so unread notifications are not
+  deleted by default. Monitor `/var/log/global-lmg/retention.log` for the
+  `notifications_dismissed` deletion count.
 
 ## Cron Background Job Logs
 

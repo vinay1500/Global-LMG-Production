@@ -5,7 +5,6 @@ import { Hero } from './components/Hero';
 import { IntroSection } from './components/IntroSection';
 import { Footer } from './components/Footer';
 import { ScrollToTop } from './components/ScrollToTop';
-import { AuthModal } from './components/auth/AuthModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Seo } from './components/seo/Seo';
 import { buildOrganizationJsonLd, buildWebPageJsonLd, buildWebSiteJsonLd } from './seo/jsonLd';
@@ -26,6 +25,9 @@ const DetailedExpertise = lazy(async () => ({
 }));
 const CareersSection = lazy(async () => ({
   default: (await import('./components/CareersSection')).CareersSection,
+}));
+const AuthModal = lazy(async () => ({
+  default: (await import('./components/auth/AuthModal')).AuthModal,
 }));
 
 const AboutPage = lazy(async () => ({
@@ -107,6 +109,20 @@ const RouteLoadingFallback = () => (
   </main>
 );
 
+const AuthModalLoadingFallback = () => (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm"
+    aria-hidden="true"
+  >
+    <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+      <div className="mx-auto h-10 w-10 rounded-full bg-gray-100 animate-pulse" />
+      <div className="mt-6 h-4 w-28 rounded-full bg-gray-100 animate-pulse" />
+      <div className="mt-4 h-10 rounded-xl bg-gray-100 animate-pulse" />
+      <div className="mt-3 h-10 rounded-xl bg-gray-100 animate-pulse" />
+    </div>
+  </div>
+);
+
 // The homepage stays brochure-focused and defers heavier sections until after first paint.
 const HomePage = () => (
   <main>
@@ -142,7 +158,7 @@ const HomePage = () => (
   </main>
 );
 
-// Dashboard access stays client-side protected until the real backend session layer is connected.
+// Dashboard access waits for the session-backed auth state before rendering the client portal.
 const DashboardRoute = () => {
   const { isAuthenticated, isAuthReady } = useAuth();
 
@@ -165,7 +181,8 @@ const DashboardRoute = () => {
 const AppLayout = () => {
   const location = useLocation();
   const { isAuthModalOpen } = useAuth();
-  const isDashboardRoute = location.pathname === '/dashboard';
+  const isDashboardRoute =
+    location.pathname === '/dashboard' || location.pathname.startsWith('/dashboard/');
 
   return (
     <div
@@ -205,7 +222,11 @@ const AppLayout = () => {
         </Routes>
       </Suspense>
 
-      {isAuthModalOpen && <AuthModal />}
+      {isAuthModalOpen && (
+        <Suspense fallback={<AuthModalLoadingFallback />}>
+          <AuthModal />
+        </Suspense>
+      )}
 
       {!isDashboardRoute && <Footer />}
     </div>

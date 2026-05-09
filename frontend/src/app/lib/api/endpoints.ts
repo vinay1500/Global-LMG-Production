@@ -60,6 +60,8 @@ export const API_ENDPOINTS = {
       joinApiPath(`/v1/me/invoices/${invoiceId}/payment-order`),
     invoicePaymentVerify: (invoiceId: string) =>
       joinApiPath(`/v1/me/invoices/${invoiceId}/payment-verify`),
+    payments: () => joinApiPath('/v1/me/payments'),
+    refunds: () => joinApiPath('/v1/me/refunds'),
   },
   notifications: {
     list: () => joinApiPath('/v1/notifications'),

@@ -11,6 +11,7 @@ import {
   uploadAdminDocument,
   uploadAdminDocumentVersion,
 } from '../modules/documents/service.js';
+import { parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const documentsRouter = Router();
@@ -68,12 +69,7 @@ documentsRouter.get(
   '/documents',
   asyncHandler(async (request, response) => {
     await requireReadPermission(request, 'document.view');
-    response.json(
-      await listDocuments({
-        limit: Number(request.query.limit || 50),
-        offset: Number(request.query.offset || 0),
-      })
-    );
+    response.json(await listDocuments(parsePaginationQuery(request.query)));
   })
 );
 

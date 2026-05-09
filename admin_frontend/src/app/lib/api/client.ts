@@ -6,7 +6,7 @@ const DEFAULT_HEADERS = {
 
 const CSRF_COOKIE_NAME = 'global_lmg_admin_csrf';
 const DEFAULT_API_TIMEOUT_MS = 15_000;
-const DEFAULT_API_DOWNLOAD_TIMEOUT_MS = 60_000;
+const DEFAULT_API_DOWNLOAD_TIMEOUT_MS = 120_000;
 const DEFAULT_PERSISTENT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000;
 const IDEMPOTENCY_STORAGE_PREFIX = 'global_lmg_admin_idempotency:v1:';
 const inFlightIdempotencyKeys = new Map<string, string>();

@@ -5,7 +5,7 @@ import { motion } from 'motion/react';
 import { Seo } from '../components/seo/Seo';
 import { ExternalFormCta } from '../components/shared/ExternalFormCta';
 import { CLIENT_INTAKE_FORM_LINK } from '../config/launchLinks';
-import { EXPERTISE_CATALOG, getExpertiseCategoryById } from '../data/expertiseCatalog';
+import { getExpertiseCategoryById } from '../data/expertiseCatalog';
 import { buildWebPageJsonLd } from '../seo/jsonLd';
 import { NotFoundPage } from './NotFoundPage';
 

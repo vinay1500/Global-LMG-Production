@@ -54,4 +54,9 @@ describe('reminder retry accounting', () => {
     const sentUpdateBlock = completeBlock.slice(sentUpdateStart, sentUpdateEnd);
     expect(sentUpdateBlock).not.toMatch(/retry_count\s*=/);
   });
+
+  it('caps one cron processing batch at 250 reminders', () => {
+    expect(source).toContain('const MAX_PROCESS_BATCH_SIZE = 250');
+    expect(source).toContain('env.REMINDER_PROCESS_BATCH_SIZE, MAX_PROCESS_BATCH_SIZE');
+  });
 });

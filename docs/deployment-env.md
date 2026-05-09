@@ -113,7 +113,9 @@ Required core values:
 - `APP_ENV=production`
 - `PORT=3001`
 - `API_JSON_BODY_LIMIT=1mb`
+- `TRUST_PROXY_HOPS=1` for direct Nginx to app deployments
 - `PUBLIC_WEB_ORIGIN=https://app.globallmg.org` or the actual deployed client/public web origin
+- `PUBLIC_WEB_ORIGINS=https://app.globallmg.org,https://www.globallmg.org` when multiple exact browser origins must share authenticated cookies
 - `AUTH_SESSION_SECRET=<strong unique secret>`
 - `SESSION_COOKIE_NAME=global_lmg_session`
 - `CSRF_COOKIE_NAME=global_lmg_csrf`
@@ -135,6 +137,26 @@ example under `/etc/global-lmg/certs/`, and do not commit certificate files.
 Relative CA paths remain supported for local development and resolve from the
 backend package directory, not the shell cwd.
 
+### API Edge, CORS, and Health
+
+`TRUST_PROXY_HOPS` controls Express `req.ip` and therefore rate-limit, audit,
+and webhook IP allowlist behavior. Use `1` for the standard topology
+`internet -> Nginx -> app`. If Cloudflare or another proxy is added before
+Nginx, use `2` for `Cloudflare -> Nginx -> app`, or switch to an explicit
+Cloudflare IP/header strategy and test IP extraction before launch.
+
+`PUBLIC_WEB_ORIGINS` is a comma-separated exact-origin allowlist for credentialed
+CORS. Keep `PUBLIC_WEB_ORIGIN` for backwards compatibility and links that need
+a single canonical web origin. All production origins must use HTTPS. Sentry
+trace propagation headers (`sentry-trace`, `baggage`) are explicitly allowed by
+API CORS.
+
+`/health/live` remains open and cheap. `/health/ready` checks MySQL but caches
+successful readiness probes for 30 seconds and failed probes for 5 seconds.
+Protect public health endpoints at Nginx/UptimeRobot with normal edge rate
+limits if they are exposed to the internet; do not add DB-backed rate limiting
+to health checks.
+
 ### MySQL Pool Sizing
 
 Each PM2 API process owns its own MySQL connection pool. Size the client API and
@@ -152,6 +174,19 @@ headroom. For example, 1 backend instance plus 1 admin backend instance with
 `MYSQL_CONNECTION_LIMIT=20` each reserves up to 40 app connections. On an Aiven
 plan with `max_connections=100`, keep total configured app pool capacity at or
 below 70.
+
+Record the database limit from the launch Aiven service before increasing pool
+or PM2 instance counts:
+
+```sql
+SHOW VARIABLES LIKE 'max_connections';
+```
+
+If Aiven reports `max_connections=76`, the 70% app-pool budget is 53
+connections. One client API instance plus one admin API instance at pool 20 each
+uses 40 configured app connections and is acceptable for early launch; two
+instances of each API at pool 20 would reserve 80 and is not acceptable on that
+tier.
 
 Early launch recommendation:
 
@@ -221,6 +256,16 @@ Online payments:
   docs/dashboard. Do not hardcode unverified or stale ranges.
 - Razorpay International/foreign-currency payments must be enabled in the Razorpay dashboard. Clients are charged in USD; Razorpay settlement to an Indian bank account is an external reconciliation concern and must not change invoice currency.
 
+Retention cleanup:
+
+- `NOTIFICATION_RETENTION_DAYS=180`
+- `NOTIFICATION_RETENTION_ONLY_DISMISSED=true`
+- Notification retention deletes only old dismissed notifications by default.
+  Unread notifications and read-but-not-dismissed notifications are retained
+  unless the policy is deliberately changed. This is separate from invoice,
+  payment, legal, audit, and security retention, which must not be shortened for
+  convenience.
+
 Country context priority is explicit request country, saved primary billing
 address, IP country fallback, phone country, then platform default. It is used
 for optional local-currency display and tax/risk context only; official pricing
@@ -234,6 +279,9 @@ is retained only for address/tax/risk context and optional display estimates,
 for example `$120.00 (approx. ₹10,000)`. Exact country price overrides are
 retired from active quote calculation; historical FX metadata remains in the
 schema for already-created snapshots and future audit flexibility.
+`country_pricing_overrides` and `pricing_country_price_overrides` are retained
+as historical/admin-reference tables only; they must not be treated as the
+source of official payable amounts without a new product and tax review.
 
 Storage/scanning:
 
@@ -262,7 +310,9 @@ Required core values:
 - `APP_ENV=production`
 - `PORT=3005`
 - `ADMIN_JSON_BODY_LIMIT=2mb`
+- `TRUST_PROXY_HOPS=1` for direct Nginx to app deployments
 - `PUBLIC_ADMIN_WEB_ORIGIN=https://admin.globallmg.org`
+- `PUBLIC_ADMIN_WEB_ORIGINS=https://admin.globallmg.org`
 - `AUTH_SESSION_SECRET=<strong unique admin secret>`
 - `SESSION_COOKIE_NAME=global_lmg_admin_session`
 - `CSRF_COOKIE_NAME=global_lmg_admin_csrf`
@@ -317,6 +367,11 @@ filters can carry more structured metadata. Admin document bytes still use
 webhooks also use route-specific raw/urlencoded parsers. `JSON_BODY_LIMIT` is
 accepted as a compatibility alias when `ADMIN_JSON_BODY_LIMIT` is not set.
 
+Admin CORS uses `PUBLIC_ADMIN_WEB_ORIGINS`, a comma-separated exact-origin
+allowlist. Keep it narrow; do not add public/client origins to the admin API.
+If an admin custom domain is added, add the exact HTTPS origin and verify login,
+CSRF mutations, Sentry trace headers, and PDF blob previews.
+
 Observability:
 
 - `SENTRY_DSN=<admin-api-project-dsn>`
@@ -350,6 +405,8 @@ Public/client frontend:
 
 - `VITE_PUBLIC_SITE_URL=https://app.globallmg.org` or the actual public/client web origin
 - `VITE_API_BASE_URL=/api` when Nginx proxies `/api` to the backend
+- `VITE_API_TIMEOUT_MS=15000`
+- `VITE_API_DOWNLOAD_TIMEOUT_MS=120000`
 - `VITE_GOOGLE_CLIENT_ID` only when backend `GOOGLE_AUTH_MODE=google-jwt`
 - `VITE_SENTRY_DSN=<public-frontend-project-dsn>`
 - `VITE_SENTRY_ENVIRONMENT=production`
@@ -366,10 +423,18 @@ context; plain HTTP deployments on non-localhost hosts will fail gracefully with
 Admin frontend:
 
 - `VITE_API_BASE_URL=/api` when Nginx proxies `/api` to the admin backend
+- `VITE_API_TIMEOUT_MS=15000`
+- `VITE_API_DOWNLOAD_TIMEOUT_MS=120000`
 - `VITE_SENTRY_DSN=<admin-frontend-project-dsn>`
 - `VITE_SENTRY_ENVIRONMENT=production`
 - `VITE_SENTRY_RELEASE=<git-sha-or-release-version>`
 - `VITE_SENTRY_TRACES_SAMPLE_RATE=0.05`
+
+The 15 second API timeout is for normal JSON calls. Upload, PDF, CSV, and blob
+download flows use the longer 120 second timeout. Persistent idempotency keys
+are stored in `sessionStorage`; this protects retries within the same tab. A
+future cross-tab improvement can use `localStorage` or `BroadcastChannel` so a
+lost response retried from a second tab reuses the same key.
 
 ## Current Validator Behavior
 

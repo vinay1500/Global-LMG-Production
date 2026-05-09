@@ -316,7 +316,7 @@ export const DashboardProvider: React.FC<{ children: ReactNode }> = ({ children 
 
       throw error;
     }
-  }, [resolveAuthExpiry]);
+  }, [currentUser, resolveAuthExpiry]);
 
   const uploadDocuments = async (files: File[]) => {
     const nextFiles = files.filter((file) => file.size > 0);

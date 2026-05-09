@@ -67,3 +67,19 @@ describe('refund creation integrity', () => {
     expect(block).toContain('refundAmount.minorUnits > availableMinor');
   });
 });
+
+describe('invoice send idempotency', () => {
+  it('scopes invoice send idempotency to the acting admin and request fingerprint', () => {
+    const block = extractBlock(
+      routes,
+      "billingRouter.post(\n  '/billing/invoices/:invoiceId/send'",
+      "billingRouter.post(\n  '/billing/payments'"
+    );
+
+    expect(block).toContain('runIdempotentJson(request');
+    expect(block).toContain('actorKey: actor.id');
+    expect(block).toContain('actorUserId: actor.userId');
+    expect(block).toContain('body: { invoiceId }');
+    expect(block).toContain("scope: 'admin:billing:invoice:send'");
+  });
+});

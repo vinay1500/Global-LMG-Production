@@ -1,10 +1,13 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { ResultSetHeader } from 'mysql2/promise';
+import { env } from '../config/env.js';
 import { closeMysqlPool, getMysqlPool } from '../lib/mysql.js';
 
 const BATCH_LIMIT = 5000;
 export const PROVIDER_EVENT_RETENTION_DAYS = 90;
+export const NOTIFICATION_RETENTION_DAYS = env.NOTIFICATION_RETENTION_DAYS;
+export const NOTIFICATION_RETENTION_ONLY_DISMISSED = env.NOTIFICATION_RETENTION_ONLY_DISMISSED;
 
 export type RetentionJob = {
   label: string;
@@ -18,7 +21,21 @@ const deleteJob = (label: string, tableName: string, whereSql: string, values: A
   values,
 });
 
-export const retentionJobs: RetentionJob[] = [
+export const buildNotificationRetentionJob = (
+  retentionDays = NOTIFICATION_RETENTION_DAYS,
+  onlyDismissed = NOTIFICATION_RETENTION_ONLY_DISMISSED
+): RetentionJob =>
+  deleteJob(
+    onlyDismissed ? 'notifications_dismissed' : 'notifications_read_or_dismissed',
+    'notifications',
+    onlyDismissed
+      ? 'dismissed_at IS NOT NULL AND dismissed_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? DAY)'
+      : `(dismissed_at IS NOT NULL OR is_read = 1 OR read_at IS NOT NULL)
+         AND COALESCE(dismissed_at, read_at, created_at) < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? DAY)`,
+    [retentionDays]
+  );
+
+export const buildRetentionJobs = (): RetentionJob[] => [
   deleteJob(
     'security_events',
     'security_events',
@@ -80,7 +97,10 @@ export const retentionJobs: RetentionJob[] = [
     '(consumed_at IS NOT NULL OR expires_at < UTC_TIMESTAMP(6)) AND updated_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? DAY)',
     [30]
   ),
+  buildNotificationRetentionJob(),
 ];
+
+export const retentionJobs: RetentionJob[] = buildRetentionJobs();
 
 export const runRetentionCleanup = async () => {
   const pool = getMysqlPool();

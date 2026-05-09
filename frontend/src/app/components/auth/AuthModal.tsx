@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   ArrowLeft,
@@ -150,35 +150,38 @@ export const AuthModal = () => {
     validationStatusCode: signUpForm.addressValidationStatusCode,
   };
 
-  const persistPendingAuthState = (
-    nextPendingVerificationView: PendingVerificationView | null,
-    options?: {
-      authMode?: 'signin' | 'signup';
-      deliveryHint?: string | null;
-      phoneOtpBackView?: 'credentials' | 'phone-capture';
-      verificationForm?: typeof verificationForm;
-    }
-  ) => {
-    if (typeof window === 'undefined') {
-      return;
-    }
+  const persistPendingAuthState = useCallback(
+    (
+      nextPendingVerificationView: PendingVerificationView | null,
+      options?: {
+        authMode?: 'signin' | 'signup';
+        deliveryHint?: string | null;
+        phoneOtpBackView?: 'credentials' | 'phone-capture';
+        verificationForm?: typeof verificationForm;
+      }
+    ) => {
+      if (typeof window === 'undefined') {
+        return;
+      }
 
-    if (!nextPendingVerificationView) {
-      window.sessionStorage.removeItem(PENDING_AUTH_STORAGE_KEY);
-      return;
-    }
+      if (!nextPendingVerificationView) {
+        window.sessionStorage.removeItem(PENDING_AUTH_STORAGE_KEY);
+        return;
+      }
 
-    window.sessionStorage.setItem(
-      PENDING_AUTH_STORAGE_KEY,
-      JSON.stringify({
-        authMode: options?.authMode ?? authMode,
-        deliveryHint: typeof options?.deliveryHint === 'undefined' ? deliveryHint : options.deliveryHint,
-        pendingVerificationView: nextPendingVerificationView,
-        phoneOtpBackView: options?.phoneOtpBackView ?? phoneOtpBackView,
-        verificationForm: options?.verificationForm ?? verificationForm,
-      })
-    );
-  };
+      window.sessionStorage.setItem(
+        PENDING_AUTH_STORAGE_KEY,
+        JSON.stringify({
+          authMode: options?.authMode ?? authMode,
+          deliveryHint: typeof options?.deliveryHint === 'undefined' ? deliveryHint : options.deliveryHint,
+          pendingVerificationView: nextPendingVerificationView,
+          phoneOtpBackView: options?.phoneOtpBackView ?? phoneOtpBackView,
+          verificationForm: options?.verificationForm ?? verificationForm,
+        })
+      );
+    },
+    [authMode, deliveryHint, phoneOtpBackView, verificationForm]
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -296,134 +299,45 @@ export const AuthModal = () => {
     void loadGoogleIdentitySdk().catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    if (view !== 'credentials' || !isGoogleIdentityConfigured) {
-      setGoogleButtonReady(false);
-      setGoogleButtonError(
-        isGoogleIdentityConfigured ? null : 'Google sign-in is not available right now.'
-      );
-      return;
-    }
-
-    const mountNode = googleButtonHost;
-    if (!mountNode) {
-      setGoogleButtonReady(false);
-      setGoogleButtonError('Google sign-in button could not be initialized.');
-      return;
-    }
-
-    let disposed = false;
-    let cleanup: (() => void) | undefined;
-    setGoogleButtonReady(false);
-    setGoogleButtonError(null);
-
-    void issueGoogleNonce()
-      .then((nonceResult) =>
-        mountGoogleIdentityButton(mountNode, {
-          nonce: nonceResult.nonce,
-          width: mountNode.clientWidth,
-          onCredential: async (credential) => {
-            clearFeedback();
-            setIsSubmitting(true);
-
-            try {
-              const result = await signInWithGoogle({
-                credential,
-                nonce: nonceResult.nonce,
-                rememberMe: signInForm.rememberMe,
-              });
-              handleGoogleAuthResult(result);
-            } catch (error) {
-              setAlert({
-                type: 'error',
-                message:
-                  error instanceof Error && !('code' in error)
-                    ? error.message
-                    : mapAuthError(error),
-              });
-            } finally {
-              setIsSubmitting(false);
-            }
-          },
-          onError: (error) => {
-            setAlert({ type: 'error', message: error.message });
-          },
-        })
-      )
-      .then((nextCleanup) => {
-        if (disposed) {
-          nextCleanup();
-          return;
-        }
-
-        cleanup = nextCleanup;
-        setGoogleButtonReady(true);
-        setGoogleButtonError(null);
-      })
-      .catch((error) => {
-        if (!disposed) {
-          setGoogleButtonReady(false);
-          setGoogleButtonError(
-            error instanceof Error ? error.message : 'Google sign-in is unavailable right now.'
-          );
-          setAlert({
-            type: 'error',
-            message: error instanceof Error ? error.message : 'Google sign-in is unavailable right now.',
-          });
-        }
-      });
-
-    return () => {
-      disposed = true;
-      setGoogleButtonReady(false);
-      cleanup?.();
-    };
-  }, [googleButtonHost, issueGoogleNonce, signInForm.rememberMe, signInWithGoogle, view]);
-
   // Shared field styles keep the glassmorphism forms visually consistent across every step.
   const glassFieldClass =
     'w-full rounded-2xl border border-white/15 bg-slate-950/45 px-4 py-3 text-sm text-white outline-none placeholder:text-white/50';
   const glassFieldGroupClass =
     'flex items-center gap-3 rounded-2xl border border-white/15 bg-slate-950/45 px-4 py-3';
 
-  const clearFeedback = () => {
+  const clearFeedback = useCallback(() => {
     setAlert(null);
     setFieldErrors({});
     setDeliveryHint(null);
-  };
+  }, []);
 
-  const clearPendingVerification = () => {
+  const clearPendingVerification = useCallback(() => {
     setPendingVerificationView(null);
     setPhoneOtpBackView('phone-capture');
     persistPendingAuthState(null);
-  };
+  }, [persistPendingAuthState]);
 
-  const openPendingVerificationView = (
-    nextView: PendingVerificationView,
-    options?: { phoneOtpBackView?: 'credentials' | 'phone-capture' }
-  ) => {
-    setPendingVerificationView(nextView);
-    if (nextView === 'phone-otp') {
-      setPhoneOtpBackView(options?.phoneOtpBackView ?? 'credentials');
-    }
-    persistPendingAuthState(nextView, {
-      phoneOtpBackView:
-        nextView === 'phone-otp' ? options?.phoneOtpBackView ?? 'credentials' : phoneOtpBackView,
-    });
-    setView(nextView);
-  };
+  const openPendingVerificationView = useCallback(
+    (
+      nextView: PendingVerificationView,
+      options?: { phoneOtpBackView?: 'credentials' | 'phone-capture' }
+    ) => {
+      setPendingVerificationView(nextView);
+      if (nextView === 'phone-otp') {
+        setPhoneOtpBackView(options?.phoneOtpBackView ?? 'credentials');
+      }
+      persistPendingAuthState(nextView, {
+        phoneOtpBackView:
+          nextView === 'phone-otp' ? options?.phoneOtpBackView ?? 'credentials' : phoneOtpBackView,
+      });
+      setView(nextView);
+    },
+    [persistPendingAuthState, phoneOtpBackView]
+  );
 
-  const buildAlertMessage = (message: string, nextDeliveryHint?: string) => {
+  const buildAlertMessage = useCallback((message: string, nextDeliveryHint?: string) => {
     return nextDeliveryHint ? `${message} ${nextDeliveryHint}` : message;
-  };
-
-  const handleSignUpCountryChange = (country: string) => {
-    setSignUpForm((current) => ({
-      ...current,
-      country,
-      phone: applyCountryDialCode(current.phone, country),
-    }));
-  };
+  }, []);
 
   const handleVerificationCountryChange = (country: string) => {
     setVerificationForm((current) => ({
@@ -561,13 +475,13 @@ export const AuthModal = () => {
     return {} as Record<string, string>;
   };
 
-  const handleAuthSuccess = (message: string) => {
+  const handleAuthSuccess = useCallback((message: string) => {
     clearPendingVerification();
     setAlert({ type: 'success', message });
     navigate('/dashboard');
-  };
+  }, [clearPendingVerification, navigate]);
 
-  const mapAuthError = (error: unknown) => {
+  const mapAuthError = useCallback((error: unknown) => {
     if (!error || typeof error !== 'object' || !('code' in error)) {
       return 'Something went wrong. Please try again.';
     }
@@ -624,42 +538,138 @@ export const AuthModal = () => {
       default:
         return authError.message || 'Something went wrong. Please try again.';
       }
-  };
+  }, []);
 
-  const handleGoogleAuthResult = (result: Awaited<ReturnType<typeof signInWithGoogle>>) => {
-    if (result.status === 'authenticated') {
-      setDeliveryHint(null);
-      handleAuthSuccess(result.message);
+  const handleGoogleAuthResult = useCallback(
+    (result: Awaited<ReturnType<typeof signInWithGoogle>>) => {
+      if (result.status === 'authenticated') {
+        setDeliveryHint(null);
+        handleAuthSuccess(result.message);
+        return;
+      }
+
+      if (result.status === 'phone_capture_required') {
+        openPendingVerificationView('phone-capture');
+        setVerificationForm((current) => ({
+          ...current,
+          phone: result.phone || applyCountryDialCode('', DEFAULT_COUNTRY),
+          country: detectCountryFromPhone(result.phone || '', DEFAULT_COUNTRY),
+        }));
+        setDeliveryHint(result.deliveryHint || null);
+        setAlert({
+          type: 'info',
+          message:
+            'Google returned a verified email, but we still need your phone number for secure phone verification.',
+        });
+        return;
+      }
+
+      if (result.status === 'phone_otp_required') {
+        openPendingVerificationView('phone-otp', { phoneOtpBackView: 'phone-capture' });
+        setVerificationForm((current) => ({
+          ...current,
+          phone: result.phone || current.phone,
+          country: detectCountryFromPhone(result.phone || current.phone, current.country),
+        }));
+        setDeliveryHint(result.deliveryHint || null);
+        setAlert({ type: 'info', message: buildAlertMessage(result.message, result.deliveryHint) });
+      }
+    },
+    [buildAlertMessage, handleAuthSuccess, openPendingVerificationView]
+  );
+
+  useEffect(() => {
+    if (view !== 'credentials' || !isGoogleIdentityConfigured) {
+      setGoogleButtonReady(false);
+      setGoogleButtonError(
+        isGoogleIdentityConfigured ? null : 'Google sign-in is not available right now.'
+      );
       return;
     }
 
-    if (result.status === 'phone_capture_required') {
-      openPendingVerificationView('phone-capture');
-      setVerificationForm((current) => ({
-        ...current,
-        phone: result.phone || applyCountryDialCode('', DEFAULT_COUNTRY),
-        country: detectCountryFromPhone(result.phone || '', DEFAULT_COUNTRY),
-      }));
-      setDeliveryHint(result.deliveryHint || null);
-      setAlert({
-        type: 'info',
-        message:
-          'Google returned a verified email, but we still need your phone number for secure phone verification.',
+    const mountNode = googleButtonHost;
+    if (!mountNode) {
+      setGoogleButtonReady(false);
+      setGoogleButtonError('Google sign-in button could not be initialized.');
+      return;
+    }
+
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    setGoogleButtonReady(false);
+    setGoogleButtonError(null);
+
+    void issueGoogleNonce()
+      .then((nonceResult) =>
+        mountGoogleIdentityButton(mountNode, {
+          nonce: nonceResult.nonce,
+          width: mountNode.clientWidth,
+          onCredential: async (credential) => {
+            clearFeedback();
+            setIsSubmitting(true);
+
+            try {
+              const result = await signInWithGoogle({
+                credential,
+                nonce: nonceResult.nonce,
+                rememberMe: signInForm.rememberMe,
+              });
+              handleGoogleAuthResult(result);
+            } catch (error) {
+              setAlert({
+                type: 'error',
+                message:
+                  error instanceof Error && !('code' in error)
+                    ? error.message
+                    : mapAuthError(error),
+              });
+            } finally {
+              setIsSubmitting(false);
+            }
+          },
+          onError: (error) => {
+            setAlert({ type: 'error', message: error.message });
+          },
+        })
+      )
+      .then((nextCleanup) => {
+        if (disposed) {
+          nextCleanup();
+          return;
+        }
+
+        cleanup = nextCleanup;
+        setGoogleButtonReady(true);
+        setGoogleButtonError(null);
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setGoogleButtonReady(false);
+          setGoogleButtonError(
+            error instanceof Error ? error.message : 'Google sign-in is unavailable right now.'
+          );
+          setAlert({
+            type: 'error',
+            message: error instanceof Error ? error.message : 'Google sign-in is unavailable right now.',
+          });
+        }
       });
-      return;
-    }
 
-    if (result.status === 'phone_otp_required') {
-      openPendingVerificationView('phone-otp', { phoneOtpBackView: 'phone-capture' });
-      setVerificationForm((current) => ({
-        ...current,
-        phone: result.phone || current.phone,
-        country: detectCountryFromPhone(result.phone || current.phone, current.country),
-      }));
-      setDeliveryHint(result.deliveryHint || null);
-      setAlert({ type: 'info', message: buildAlertMessage(result.message, result.deliveryHint) });
-    }
-  };
+    return () => {
+      disposed = true;
+      setGoogleButtonReady(false);
+      cleanup?.();
+    };
+  }, [
+    clearFeedback,
+    googleButtonHost,
+    handleGoogleAuthResult,
+    issueGoogleNonce,
+    mapAuthError,
+    signInForm.rememberMe,
+    signInWithGoogle,
+    view,
+  ]);
 
   // Submission handlers stay close to the component because each step controls both UI flow and API-driven auth transitions.
   const handleSignInSubmit = async (event: React.FormEvent<HTMLFormElement>) => {

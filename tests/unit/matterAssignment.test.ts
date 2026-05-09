@@ -3,6 +3,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 const baseAssignment = {
   assignmentRoleCode: 'external_counsel',
+  counselPartnerId: 'counsel_partner_test',
+};
+
+const unassignedAssignment = {
+  assignmentRoleCode: 'external_counsel',
 };
 
 let assignmentSchema: ZodType;
@@ -81,6 +86,44 @@ describe('matter assignment fee validation', () => {
   });
 
   it('preserves optional fee-field behavior when fee amounts are omitted', () => {
-    expectAssignmentValid(baseAssignment);
+    expectAssignmentValid(unassignedAssignment);
+  });
+
+  it('accepts assignment fees for an internal user assignee', () => {
+    expectAssignmentValid({
+      assignmentRoleCode: 'case_manager',
+      internalUserId: 'internal_user_test',
+      feeAgreedAmount: 100,
+      feePaidAmount: 20,
+      feeDueAmount: 80,
+    });
+  });
+
+  it('accepts assignment fees for a counsel partner assignee', () => {
+    expectAssignmentValid({
+      ...baseAssignment,
+      feeAgreedAmount: 100,
+      feePaidAmount: 40,
+      feeDueAmount: 60,
+    });
+  });
+
+  it('rejects positive assignment fees without an assignee', () => {
+    expectAssignmentInvalid(
+      {
+        ...unassignedAssignment,
+        feeAgreedAmount: 100,
+      },
+      'Select an assignee before adding assignment fees.'
+    );
+  });
+
+  it('preserves zero-fee unassigned assignment schema behavior', () => {
+    expectAssignmentValid({
+      ...unassignedAssignment,
+      feeAgreedAmount: 0,
+      feePaidAmount: 0,
+      feeDueAmount: 0,
+    });
   });
 });

@@ -68,7 +68,9 @@ export const loadGoogleIdentitySdk = async () => {
 
   if (!sdkLoadPromise) {
     sdkLoadPromise = new Promise<void>((resolve, reject) => {
-      let timeoutId: number | undefined;
+      const timeoutId = window.setTimeout(() => {
+        reject(new Error('Google sign-in SDK timed out while loading.'));
+      }, GOOGLE_SDK_LOAD_TIMEOUT_MS);
 
       const clearPendingTimeout = () => {
         if (timeoutId) {
@@ -94,10 +96,6 @@ export const loadGoogleIdentitySdk = async () => {
         clearPendingTimeout();
         reject(new Error('Google sign-in SDK could not be loaded.'));
       };
-
-      timeoutId = window.setTimeout(() => {
-        reject(new Error('Google sign-in SDK timed out while loading.'));
-      }, GOOGLE_SDK_LOAD_TIMEOUT_MS);
 
       if (existingScript) {
         existingScript.addEventListener('load', handleLoad, { once: true });

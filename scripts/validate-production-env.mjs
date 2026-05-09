@@ -213,6 +213,47 @@ const validateHttpsOrigin = (scope, key, value) => {
   pass(scope, key, `${key} is a production HTTPS origin.`);
 };
 
+const parseCsvList = (value) =>
+  String(value || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const validateHttpsOriginList = (scope, key, value, fallbackValue) => {
+  const origins = parseCsvList(value || fallbackValue);
+
+  if (origins.length === 0) {
+    fail(scope, key, `${key} must list at least one HTTPS origin.`);
+    return;
+  }
+
+  let hasFailure = false;
+  for (const origin of origins) {
+    if (!isHttps(origin)) {
+      fail(scope, key, `${key} includes a non-HTTPS origin: ${origin}`);
+      hasFailure = true;
+      continue;
+    }
+
+    try {
+      const parsed = new URL(origin);
+      if (['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) {
+        fail(scope, key, `${key} must not include localhost in production.`);
+        hasFailure = true;
+      }
+    } catch {
+      fail(scope, key, `${key} includes an invalid origin: ${origin}`);
+      hasFailure = true;
+    }
+
+    validateProductionHostname(scope, key, origin);
+  }
+
+  if (!hasFailure) {
+    pass(scope, key, `${key} contains production HTTPS origins.`);
+  }
+};
+
 const validateRequiredFile = (scope, file) => {
   if (!file.exists) {
     fail(scope, 'env_file', `Missing env file: ${path.relative(repoRoot, file.absolutePath)}`);
@@ -223,7 +264,7 @@ const validateRequiredFile = (scope, file) => {
   return true;
 };
 
-const validateCoreApi = (scope, env, originKey) => {
+const validateCoreApi = (scope, env, originKey, originListKey) => {
   if (get(env, 'APP_ENV') !== 'production') {
     fail(scope, 'APP_ENV', 'APP_ENV must be production.');
   } else {
@@ -239,6 +280,7 @@ const validateCoreApi = (scope, env, originKey) => {
   }
 
   validateHttpsOrigin(scope, originKey, get(env, originKey));
+  validateHttpsOriginList(scope, originListKey, get(env, originListKey), get(env, originKey));
 
   pass(scope, 'COOKIE_SECURE', 'Session and CSRF cookies resolve to Secure in production runtime.');
 
@@ -617,7 +659,7 @@ for (const [scope, file] of Object.entries(files)) {
 }
 
 if (files.backend.exists) {
-  validateCoreApi('backend', files.backend.values, 'PUBLIC_WEB_ORIGIN');
+  validateCoreApi('backend', files.backend.values, 'PUBLIC_WEB_ORIGIN', 'PUBLIC_WEB_ORIGINS');
   validateSentry('backend', files.backend.values);
   validateEmail('backend', files.backend.values);
   validateSms('backend', files.backend.values);
@@ -627,7 +669,7 @@ if (files.backend.exists) {
 }
 
 if (files.admin_backend.exists) {
-  validateCoreApi('admin_backend', files.admin_backend.values, 'PUBLIC_ADMIN_WEB_ORIGIN');
+  validateCoreApi('admin_backend', files.admin_backend.values, 'PUBLIC_ADMIN_WEB_ORIGIN', 'PUBLIC_ADMIN_WEB_ORIGINS');
   validateSentry('admin_backend', files.admin_backend.values);
   validateEmail('admin_backend', files.admin_backend.values);
   validateSms('admin_backend', files.admin_backend.values);

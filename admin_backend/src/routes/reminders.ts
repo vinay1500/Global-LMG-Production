@@ -6,16 +6,13 @@ import {
   processDueReminders,
   retryReminder,
 } from '../modules/reminders/service.js';
+import { parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const remindersRouter = Router();
 
-const listQuerySchema = z.object({
-  limit: z.coerce.number().int().positive().max(100).optional(),
-});
-
 const processSchema = z.object({
-  limit: z.coerce.number().int().positive().max(100).optional(),
+  limit: z.coerce.number().int().positive().max(250).optional(),
 });
 
 const reminderParamsSchema = z.object({
@@ -26,7 +23,7 @@ remindersRouter.get(
   '/reminders/workspace',
   asyncHandler(async (request, response) => {
     await requireReadPermission(request, 'event.view');
-    response.json(await listReminderWorkspace(listQuerySchema.parse(request.query)));
+    response.json(await listReminderWorkspace(parsePaginationQuery(request.query, { maxLimit: 100 })));
   })
 );
 

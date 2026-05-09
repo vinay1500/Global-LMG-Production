@@ -65,6 +65,12 @@ Keep total configured app connections below about 70% of the Aiven
 `max_connections` value. This leaves room for migrations, provider jobs, manual
 diagnostics, and Aiven maintenance.
 
+Verify the Aiven plan limit before launch:
+
+```sql
+SHOW VARIABLES LIKE 'max_connections';
+```
+
 Examples:
 
 - 1 backend + 1 admin backend, `MYSQL_CONNECTION_LIMIT=20` each = 40 total app
@@ -72,6 +78,9 @@ Examples:
 - If Aiven `max_connections=100`, keep total app pool capacity at or below 70.
 - With two backend instances and two admin backend instances at pool 20, total
   app capacity is 80, which is too high for a 100-connection Aiven tier.
+- If Aiven `max_connections=76`, keep total app pool capacity at or below 53.
+  One backend plus one admin backend at pool 20 each reserves 40 app
+  connections and leaves launch headroom.
 
 Early launch recommendation:
 
@@ -203,6 +212,10 @@ Upgrade the VPS or move work off-host when any of these are true:
 - [ ] CPU/RAM/disk alerts are configured.
 - [ ] Reminder cron failure alert is configured.
 - [ ] Aiven MySQL connection and storage alerts are configured.
+- [ ] Aiven `max_connections` is recorded from `SHOW VARIABLES LIKE 'max_connections'`.
+- [ ] Configured app pool total is recorded:
+  `(backend PM2 instances x backend MYSQL_CONNECTION_LIMIT) + (admin PM2 instances x admin MYSQL_CONNECTION_LIMIT)`.
+- [ ] Configured app pool total is no more than 70% of Aiven `max_connections`.
 - [ ] ClamAV memory and readiness are checked after boot.
 - [ ] If local uploads are used, backup/restore from `docs/object-storage.md`
   has been tested.

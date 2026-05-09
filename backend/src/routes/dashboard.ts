@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { requireAuthenticatedUser } from '../lib/authSession.js';
 import { requireCsrf } from '../lib/csrf.js';
 import { asyncHandler } from '../lib/httpErrors.js';
-import { getIdempotencyKey, runIdempotentJson } from '../lib/idempotency.js';
+import { requireIdempotencyKey, runIdempotentJson } from '../lib/idempotency.js';
 import { isMessageContentWithinLimit, sanitizeMessageContent } from '../lib/messageContent.js';
 import { dashboardService } from '../modules/dashboard/service.js';
 import type { PlatformUser } from '../modules/dashboard/types.js';
@@ -195,7 +195,10 @@ dashboardRouter.post(
     const authenticatedUser = await requireAuthenticatedUser(request, response);
     const payload = dashboardRequestSchema.parse(request.body);
     const dashboardUser = toDashboardUser(authenticatedUser);
-    const idempotencyKey = getIdempotencyKey(request);
+    const idempotencyKey = requireIdempotencyKey(
+      request,
+      'Idempotency-Key header is required to submit a request.'
+    );
     const result = await runIdempotentJson(request, {
       actorKey: dashboardUser.id,
       operation: async () => {

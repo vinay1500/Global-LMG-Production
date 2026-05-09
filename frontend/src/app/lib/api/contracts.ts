@@ -198,6 +198,34 @@ export interface DashboardSnapshotResponse {
   users: PlatformUser[];
 }
 
+export interface ClientPaymentSummaryResponse {
+  clientAccountId: string;
+  createdByUserId: string | null;
+  currencyCode: string;
+  gatewayOrderRef: string | null;
+  gatewayPaymentRef: string | null;
+  gatewayProviderCode: string;
+  grossAmount: number;
+  id: string;
+  initiatedAt: string;
+  invoiceId: string | null;
+  netAmount: number;
+  statusCode: string;
+}
+
+export interface ClientRefundSummaryResponse {
+  amount: number;
+  approvedByUserId: string | null;
+  completedAt: string | null;
+  id: string;
+  invoiceId: string | null;
+  paymentId: string;
+  reasonText: string;
+  requestedAt: string;
+  requestedByUserId: string;
+  statusCode: string;
+}
+
 export interface DashboardPackageSelectionResponse {
   generatedInvoiceId: string;
   selectedPackageId: string;

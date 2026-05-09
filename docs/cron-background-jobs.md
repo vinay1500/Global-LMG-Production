@@ -51,6 +51,16 @@ Each job uses its own non-blocking `flock` file in `/var/lock/global-lmg`.
 If a previous run is still active, cron skips the next run instead of starting
 an overlapping copy.
 
+## Reminder Batch Capacity
+
+Reminder processing runs one capped batch per cron invocation. The default
+`REMINDER_PROCESS_BATCH_SIZE` is `100`, and the manual process endpoint caps a
+single run at `250`. Increase the batch size only after checking provider send
+limits, cron duration, and reminder backlog. Watch the backlog in the reminders
+workspace and `/var/log/global-lmg/reminders.log`; if due reminders keep growing
+after multiple cron runs, raise the batch size before shortening the cron
+interval.
+
 ## Retention Rules
 
 The retention cleanup is intentionally conservative:
@@ -61,6 +71,10 @@ The retention cleanup is intentionally conservative:
 - completed `idempotency_keys`: keep 7 days.
 - expired `rate_limit_buckets`: delete after the reset window and block window have passed.
 - consumed or expired auth flows and verification/reset tokens: keep 30 days.
+- `notifications`: by default, delete only dismissed notifications whose
+  `dismissed_at` is older than `NOTIFICATION_RETENTION_DAYS` days. The default
+  is `180`, and `NOTIFICATION_RETENTION_ONLY_DISMISSED=true` keeps unread and
+  read-but-not-dismissed notifications indefinitely.
 
 The cleanup does not delete client matters, documents, invoices, payments,
 messages, or request records.

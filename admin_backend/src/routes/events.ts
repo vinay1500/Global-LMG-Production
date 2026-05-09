@@ -6,6 +6,7 @@ import {
   isAllowedPlatformTimezone,
   PLATFORM_TIMEZONE_PATTERN,
 } from '../modules/settings/platformSettings.js';
+import { parsePaginationQuery } from './queryValidation.js';
 import { requireMutationPermission, requireReadPermission } from './shared.js';
 
 export const eventsRouter = Router();
@@ -42,7 +43,19 @@ const createEventSchema = z.object({
   visibleToClient: z.boolean().optional(),
 });
 
-const updateEventSchema = z.object({
+const hasEffectiveEventPatchValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  return true;
+};
+
+export const updateEventSchema = z.object({
   clientAccountId: z.string().trim().min(2).optional(),
   date: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   durationMinutes: z.coerce.number().int().positive().max(720).optional(),
@@ -57,6 +70,8 @@ const updateEventSchema = z.object({
   visibleToClient: z.boolean().optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one event field is required.',
+}).refine((value) => Object.values(value).some(hasEffectiveEventPatchValue), {
+  message: 'At least one non-empty event field is required.',
 });
 
 const cancelEventSchema = z.object({
@@ -67,12 +82,7 @@ eventsRouter.get(
   '/events',
   asyncHandler(async (request, response) => {
     await requireReadPermission(request, 'event.view');
-    response.json(
-      await getWorkspace({
-        limit: Number(request.query.limit || 50),
-        offset: Number(request.query.offset || 0),
-      })
-    );
+    response.json(await getWorkspace(parsePaginationQuery(request.query)));
   })
 );
 

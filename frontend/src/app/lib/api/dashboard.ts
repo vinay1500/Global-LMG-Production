@@ -7,6 +7,8 @@ import type {
   ClientAccountSettingsResponse,
   DashboardRequestPaymentSubmissionResponse,
   DashboardRequestPaymentVerifyResponse,
+  ClientPaymentSummaryResponse,
+  ClientRefundSummaryResponse,
   InvoiceDetailResponse,
   InvoicePaymentOrderResponse,
   InvoicePaymentVerifyResponse,
@@ -91,6 +93,10 @@ export const dashboardApi = {
     apiRequest<RequestPricingConfigResponse>(API_ENDPOINTS.dashboard.requestConfig()),
   getInvoiceDetail: (invoiceId: string) =>
     apiRequest<InvoiceDetailResponse>(API_ENDPOINTS.me.invoiceDetail(invoiceId)),
+  listPayments: () =>
+    apiRequest<ClientPaymentSummaryResponse[]>(API_ENDPOINTS.me.payments()),
+  listRefunds: () =>
+    apiRequest<ClientRefundSummaryResponse[]>(API_ENDPOINTS.me.refunds()),
   createInvoicePaymentOrder: (invoiceId: string, payload: { amount?: number | null }) =>
     apiRequest<InvoicePaymentOrderResponse>(API_ENDPOINTS.me.invoicePaymentOrder(invoiceId), {
       body: JSON.stringify(payload),

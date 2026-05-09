@@ -6,7 +6,7 @@ import {
   getCountryNameOrSelf,
   isPostalCodeReasonable,
 } from '../../utils/countryDialCodes';
-import { getStateCode, getStateRegionSuggestions } from '../../utils/geoAddressData';
+import { getStateRegionSuggestions } from '../../utils/geoAddressData';
 import { getPostalCodeMetadata } from '../../utils/postalCodeMetadata';
 
 type AddressSourceCode = 'google' | 'ip_prefill' | 'manual';

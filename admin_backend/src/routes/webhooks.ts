@@ -9,6 +9,11 @@ import {
 
 export const webhookRouter = Router();
 
+webhookRouter.use((_request, response, next) => {
+  response.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 webhookRouter.post(
   '/resend',
   express.raw({ limit: '1mb', type: 'application/json' }),

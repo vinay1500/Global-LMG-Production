@@ -6,6 +6,11 @@ import { handleRazorpayWebhook } from '../modules/payments/razorpayService.js';
 
 export const webhooksRouter = Router();
 
+webhooksRouter.use((_request, response, next) => {
+  response.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
 webhooksRouter.post(
   '/webhooks/razorpay',
   asyncHandler(async (request, response) => {

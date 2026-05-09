@@ -4,11 +4,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 let dashboardRequestSchema: ZodType;
 let emailChangeConfirmSchema: ZodType;
 let phoneChangeConfirmSchema: ZodType;
+let updateEventSchema: ZodType;
 
 beforeAll(async () => {
+  process.env.APP_ENV ||= 'development';
   process.env.AUTH_SESSION_SECRET ||= 'test-client-session-secret-with-enough-length';
   ({ emailChangeConfirmSchema, phoneChangeConfirmSchema } = await import('../../backend/src/routes/me.js'));
   ({ dashboardRequestSchema } = await import('../../backend/src/routes/dashboard.js'));
+  ({ updateEventSchema } = await import('../../admin_backend/src/routes/events.js'));
 });
 
 const validDashboardRequest = {
@@ -60,6 +63,27 @@ describe('client verification code validation', () => {
         'Enter the 6-digit verification code.'
       );
     }
+  });
+});
+
+describe('admin event patch validation', () => {
+  it('rejects all-null or empty event patches that could accidentally clear fields', () => {
+    const result = updateEventSchema.safeParse({
+      matterId: null,
+      meetLink: null,
+      notes: null,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.message)).toContain(
+        'At least one non-empty event field is required.'
+      );
+    }
+  });
+
+  it('accepts an intentional non-null event patch', () => {
+    expect(updateEventSchema.safeParse({ visibleToClient: false }).success).toBe(true);
   });
 });
 

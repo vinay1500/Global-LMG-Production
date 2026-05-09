@@ -182,7 +182,11 @@ authRouter.post(
   '/auth/password-reset/confirm',
   asyncHandler(async (request, response) => {
     const payload = passwordResetConfirmSchema.parse(request.body);
-    response.json(await resetPassword(payload));
+    response.json(
+      await resetPassword(payload, {
+        ipAddress: getRequestIpAddress(request),
+      })
+    );
   })
 );
 

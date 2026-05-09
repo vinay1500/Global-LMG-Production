@@ -70,6 +70,7 @@ type MarkReminderFailedInput = {
 
 const LOCK_TTL_MINUTES = 15;
 const RETRY_DELAY_MINUTES = 10;
+const MAX_PROCESS_BATCH_SIZE = 250;
 
 const providerMode = () => ({
   email: env.EMAIL_PROVIDER_MODE,
@@ -84,7 +85,7 @@ const safeErrorMessage = (error: unknown) =>
   error instanceof Error ? truncate(error.message) : 'Unknown reminder processing failure.';
 
 const normalizeLimit = (limit?: number) =>
-  Math.max(1, Math.min(limit || env.REMINDER_PROCESS_BATCH_SIZE, 100));
+  Math.max(1, Math.min(limit || env.REMINDER_PROCESS_BATCH_SIZE, MAX_PROCESS_BATCH_SIZE));
 
 const formatDateTimeForCopy = (value: string) => value.slice(0, 16).replace(' ', ' at ');
 
