@@ -202,7 +202,7 @@ export interface MatterCreateOptions {
   consultationModes: Array<{ code: string; label: string }>;
   domains: Array<{ code: string; name: string }>;
   priorities: Array<{ code: string; label: string }>;
-  services: Array<{ code: string; domainCode?: string; domainName?: string; name: string }>;
+  services: Array<{ code: string; name: string }>;
   stages: Array<{ code: string; label: string }>;
   statuses: Array<{ code: string; label: string }>;
   urgencyRules: Array<{ code: string; label: string }>;
@@ -584,9 +584,15 @@ export interface RbacWorkspaceResponse {
     userCount: number;
   }>;
   users: Array<{
+    actorTypeCode?: string;
+    credentialsCreated?: boolean;
     displayName: string;
     email: string;
     id: string;
+    lastLoginAt?: string | null;
+    loginEnabled: boolean;
+    mfaEnabled?: boolean;
+    mustRotatePassword?: boolean;
     permissionCodes: string[];
     roleCodes: string[];
   }>;
@@ -610,6 +616,62 @@ export interface UpdateRbacRolePermissionsPayload {
 
 export interface AssignRbacUserRolePayload {
   roleCode: string;
+}
+
+export interface CreateAdminUserPayload {
+  active?: boolean;
+  city?: string | null;
+  displayName: string;
+  email: string;
+  jobTitle?: string | null;
+  loginEnabled?: boolean;
+  note?: string | null;
+  phone?: string | null;
+  provisioningKind?: 'admin';
+  requirePasswordRotation?: boolean;
+  roleCode: string;
+  sendSetupEmail?: boolean;
+  state?: string | null;
+}
+
+export interface CreateAdminUserResponse {
+  message: string;
+  mfaRequirementMode: 'enforce' | 'off' | 'warn';
+  setupEmailStatus:
+    | 'failed'
+    | 'manual_required'
+    | 'preview'
+    | 'sent'
+    | 'skipped_login_disabled'
+    | 'skipped_provider_disabled';
+  status: 'created';
+  user: {
+    displayName: string;
+    email: string;
+    id: string;
+    loginEnabled: boolean;
+    requirePasswordRotation: boolean;
+    roleCodes: string[];
+    setupEmailStatus: CreateAdminUserResponse['setupEmailStatus'];
+    setupTokenCreated: boolean;
+  };
+}
+
+export interface UpdateAdminUserPayload {
+  active?: boolean;
+  loginEnabled?: boolean;
+}
+
+export interface UpdateAdminUserResponse {
+  sessionsRevoked: boolean;
+  status: 'unchanged' | 'updated';
+  user: {
+    displayName: string;
+    email: string;
+    id: string;
+    loginEnabled: boolean;
+    roleCodes: string[];
+  };
 }
 
 export interface DashboardWorkspaceResponse {
@@ -844,8 +906,6 @@ export interface SettingsService {
   baseFee: number;
   code: string;
   description: string;
-  domainCode?: string;
-  domainName?: string;
   icon: string;
   id: string;
   isActive: boolean;
@@ -942,7 +1002,6 @@ export interface CreateServiceCatalogPayload {
   baseFee?: number;
   code?: string;
   description?: string | null;
-  domainCode?: string | null;
   icon?: string | null;
   isActive?: boolean;
   name: string;
@@ -950,6 +1009,15 @@ export interface CreateServiceCatalogPayload {
 }
 
 export type UpdateServiceCatalogPayload = Partial<Omit<CreateServiceCatalogPayload, 'code'>>;
+
+export interface CreateServiceDomainPayload {
+  code?: string;
+  isActive?: boolean;
+  name: string;
+  sortOrder?: number;
+}
+
+export type UpdateServiceDomainPayload = Partial<Omit<CreateServiceDomainPayload, 'code'>>;
 
 export interface PricingSlabPayload {
   baseAmount: number;
@@ -1148,11 +1216,53 @@ export interface TeamRegistryMember {
   country: string;
   email: string;
   id: string;
+  loginConfigured: boolean;
+  loginEnabled: boolean;
+  loginUserId: string;
   name: string;
   phone: string;
   specialization: string;
   state: string;
   type: TeamMemberType;
+}
+
+export interface EnableTeamMemberLoginPayload {
+  note?: string | null;
+  requirePasswordRotation?: boolean;
+  roleCode?: string | null;
+  sendSetupEmail?: boolean;
+}
+
+export interface EnableTeamMemberLoginResponse {
+  mfaRequirementMode: 'enforce' | 'off' | 'warn';
+  setupEmailStatus:
+    | 'failed'
+    | 'manual_required'
+    | 'preview'
+    | 'sent'
+    | 'skipped_provider_disabled';
+  status: 'enabled';
+  user: {
+    displayName: string;
+    email: string;
+    id: string;
+    loginEnabled: boolean;
+    requirePasswordRotation: boolean;
+    roleCodes: string[];
+    setupEmailStatus: EnableTeamMemberLoginResponse['setupEmailStatus'];
+    setupTokenCreated: boolean;
+  };
+}
+
+export interface UpdateTeamMemberLoginPayload {
+  loginEnabled: boolean;
+}
+
+export interface UpdateTeamMemberLoginResponse {
+  id: string;
+  loginEnabled: boolean;
+  sessionsRevoked: boolean;
+  status: 'unchanged' | 'updated';
 }
 
 export interface TeamRegistryResponse {

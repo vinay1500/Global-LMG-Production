@@ -135,7 +135,7 @@ const adminBootstrapRole = z.preprocess((value) => {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}, z.enum(['ops_admin', 'case_manager', 'billing_admin', 'messaging_desk', 'management_viewer']).default('ops_admin'));
+}, z.string().min(1).max(64).regex(/^[a-z][a-z0-9_:-]*$/).default('ops_admin'));
 
 const envSchema = z.object({
   ADMIN_BOOTSTRAP_EMAIL: optionalString,

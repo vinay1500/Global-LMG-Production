@@ -12,7 +12,10 @@ import {
   uploadAdminDocumentVersion,
 } from '../modules/documents/service.js';
 import { parsePaginationQuery } from './queryValidation.js';
-import { requireMutationPermission, requireReadPermission } from './shared.js';
+import {
+  requireAnyReadPermission,
+  requireMutationPermission,
+} from './shared.js';
 
 export const documentsRouter = Router();
 
@@ -68,23 +71,32 @@ const parseVersionUploadQuery = (request: Request) =>
 documentsRouter.get(
   '/documents',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'document.view');
-    response.json(await listDocuments(parsePaginationQuery(request.query)));
+    const actor = await requireAnyReadPermission(request, [
+      'document.view',
+      'document.view_assigned',
+    ]);
+    response.json(await listDocuments(actor, parsePaginationQuery(request.query)));
   })
 );
 
 documentsRouter.get(
   '/documents/:documentId',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'document.view');
-    response.json(await getDocumentDetail(String(request.params.documentId || '')));
+    const actor = await requireAnyReadPermission(request, [
+      'document.view',
+      'document.view_assigned',
+    ]);
+    response.json(await getDocumentDetail(actor, String(request.params.documentId || '')));
   })
 );
 
 documentsRouter.get(
   '/documents/:documentId/download',
   asyncHandler(async (request, response) => {
-    const actor = await requireReadPermission(request, 'document.download');
+    const actor = await requireAnyReadPermission(request, [
+      'document.download',
+      'document.download_assigned',
+    ]);
     const result = await getAdminDocumentFile(
       actor,
       String(request.params.documentId || ''),
@@ -102,7 +114,10 @@ documentsRouter.get(
 documentsRouter.get(
   '/documents/:documentId/preview',
   asyncHandler(async (request, response) => {
-    const actor = await requireReadPermission(request, 'document.view');
+    const actor = await requireAnyReadPermission(request, [
+      'document.view',
+      'document.view_assigned',
+    ]);
     const result = await getAdminDocumentFile(actor, String(request.params.documentId || ''), 'preview');
 
     response.setHeader('Cache-Control', 'no-store');

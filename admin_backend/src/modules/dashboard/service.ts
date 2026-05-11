@@ -1,5 +1,6 @@
 import type { RowDataPacket } from 'mysql2/promise';
 import { queryRows } from '../../lib/mysql.js';
+import type { AdminActor } from '../auth/service.js';
 import { listEntries } from '../audit/service.js';
 import { listNotifications } from '../notifications/service.js';
 import { getWorkspace as getRbacWorkspace } from '../rbac/service.js';
@@ -18,8 +19,7 @@ type RevenueRow = RowDataPacket & { monthLabel: string; revenue: number };
 type AgingRow = RowDataPacket & { amount: number; bucket: string };
 type AlertRow = RowDataPacket & { staleMatters: number };
 
-export const getWorkspace = async (viewerUserId?: number) => {
-  void viewerUserId;
+export const getWorkspace = async (actor: AdminActor) => {
   const unreadThreadsSql = `(SELECT COUNT(*) FROM conversation_threads WHERE archived_at IS NULL AND status_code = 'waiting') AS unreadThreads`;
   const unreadThreadsParams: unknown[] = [];
 
@@ -114,7 +114,7 @@ export const getWorkspace = async (viewerUserId?: number) => {
            AND last_activity_at < UTC_TIMESTAMP(6) - INTERVAL 14 DAY`
       ),
       listEntries({ limit: 5 }),
-      listNotifications({ limit: 5 }),
+      listNotifications(actor, { limit: 5 }),
       getRbacWorkspace(),
     ]);
 

@@ -12,7 +12,7 @@ dashboardRouter.get(
     const actor = await requireReadPermission(request, 'dashboard.view');
     sendPrivateJsonWithEtag(request, response, {
       actor,
-      payload: await getWorkspace(actor.userId),
+      payload: await getWorkspace(actor),
       scope: 'admin.dashboard',
     });
   })

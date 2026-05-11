@@ -1,4 +1,5 @@
 import type { AdminActor } from '../auth/service.js';
+import { getAssignedRecordScopeFilters } from '../access/scope.js';
 import {
   buildPaginationMeta,
   countEvents,
@@ -558,13 +559,33 @@ const syncCalendarForEvent = async (
   return { eventId: event.publicId, status: 'failed' as const };
 };
 
-export const getWorkspace = async (options: { limit?: number; offset?: number } = {}) => {
+export const getWorkspace = async (
+  actor: AdminActor,
+  options: { limit?: number; offset?: number } = {}
+) => {
   const pagination = normalizePagination(options);
+  const scopeFilters = await getAssignedRecordScopeFilters(actor, {
+    assignedPermission: 'event.view_assigned',
+    fullPermission: 'event.view',
+    includeClientAccounts: true,
+    includeMatters: true,
+  });
   const [clientsResponse, events, matters, total] = await Promise.all([
-    fetchClientsForList({ limit: 100, offset: 0 }),
-    fetchEvents({ includeCancelled: true, limit: pagination.limit, offset: pagination.offset }),
-    fetchMatters({ limit: 100 }),
-    countEvents({ includeCancelled: true }),
+    fetchClientsForList({
+      actor,
+      clientAccountDbIds: scopeFilters.clientAccountDbIds,
+      limit: 100,
+      offset: 0,
+    }),
+    fetchEvents({
+      actor,
+      includeCancelled: true,
+      limit: pagination.limit,
+      matterDbIds: scopeFilters.matterDbIds,
+      offset: pagination.offset,
+    }),
+    fetchMatters({ actor, limit: 100, matterDbIds: scopeFilters.matterDbIds }),
+    countEvents({ actor, includeCancelled: true, matterDbIds: scopeFilters.matterDbIds }),
   ]);
 
   return {

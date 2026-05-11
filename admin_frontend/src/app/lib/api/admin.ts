@@ -10,6 +10,8 @@ import type {
   DocumentTypesResponse,
   DocumentUploadResponse,
   DocumentsListResponse,
+  EnableTeamMemberLoginPayload,
+  EnableTeamMemberLoginResponse,
   EventsWorkspaceResponse,
   MatterPackageProposalsResponse,
   MatterWorkspaceResponse,
@@ -36,7 +38,10 @@ import type {
   PriceOverridePayload,
   CreateMatterPayload,
   CreateMatterResponse,
+  CreateAdminUserPayload,
+  CreateAdminUserResponse,
   CreateRbacRolePayload,
+  CreateServiceDomainPayload,
   CreateServiceCatalogPayload,
   PricingRulesResponse,
   PricingSlabPayload,
@@ -61,6 +66,8 @@ import type {
   UpdateCountryPricingPayload,
   UpdatePriceOverridePayload,
   UpdateInvoiceSettingsPayload,
+  UpdateAdminUserPayload,
+  UpdateAdminUserResponse,
   InvoiceSettings,
   InvoicePdfTemplate,
   InvoicePdfTemplateUpdatePayload,
@@ -69,7 +76,10 @@ import type {
   PlatformSettingsResponse,
   UpdatePlatformSettingPayload,
   UpdateReminderSettingPayload,
+  UpdateServiceDomainPayload,
   UpdateServiceCatalogPayload,
+  UpdateTeamMemberLoginPayload,
+  UpdateTeamMemberLoginResponse,
   TeamMemberPayload,
   TeamRegistryMember,
   TeamRegistryResponse,
@@ -477,6 +487,26 @@ export const adminApi = {
     apiRequest<{ status: 'removed' }>(API_ENDPOINTS.admin.settingsRbacUserRole(userId, roleCode), {
       method: 'DELETE',
     }),
+  createAdminUser: (payload: CreateAdminUserPayload) =>
+    apiRequest<CreateAdminUserResponse>(API_ENDPOINTS.admin.settingsAdminUsers(), {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      idempotency: {
+        identity: createIdempotencyIdentity('admin-user-create', [
+          payload.email,
+          payload.roleCode,
+          payload.provisioningKind || 'admin',
+        ]),
+        ttlMs: FORM_IDEMPOTENCY_TTL_MS,
+      },
+      method: 'POST',
+    }),
+  updateAdminUser: (userId: string, payload: UpdateAdminUserPayload) =>
+    apiRequest<UpdateAdminUserResponse>(API_ENDPOINTS.admin.settingsAdminUser(userId), {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      method: 'PATCH',
+    }),
   getSettingsWorkspace: () =>
     apiRequest<SettingsWorkspaceResponse>(API_ENDPOINTS.admin.settingsWorkspace()),
   getNotificationSettings: () =>
@@ -498,6 +528,18 @@ export const adminApi = {
   archiveTeamMember: (memberId: string) =>
     apiRequest<{ id: string; status: 'archived' }>(API_ENDPOINTS.admin.settingsTeamMemberArchive(memberId), {
       method: 'POST',
+    }),
+  enableTeamMemberLogin: (memberId: string, payload: EnableTeamMemberLoginPayload) =>
+    apiRequest<EnableTeamMemberLoginResponse>(API_ENDPOINTS.admin.settingsTeamMemberEnableLogin(memberId), {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }),
+  updateTeamMemberLogin: (memberId: string, payload: UpdateTeamMemberLoginPayload) =>
+    apiRequest<UpdateTeamMemberLoginResponse>(API_ENDPOINTS.admin.settingsTeamMemberLogin(memberId), {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      method: 'PATCH',
     }),
   updateNotificationTypeSetting: (typeCode: string, payload: NotificationDeliverySettingPayload) =>
     apiRequest<NotificationDeliverySetting>(API_ENDPOINTS.admin.settingsNotificationType(typeCode), {
@@ -579,6 +621,22 @@ export const adminApi = {
     }),
   archiveServiceCatalogService: (serviceId: string) =>
     apiRequest<SettingsService>(API_ENDPOINTS.admin.serviceCatalogServiceArchive(serviceId), {
+      method: 'POST',
+    }),
+  createServiceCatalogDomain: (payload: CreateServiceDomainPayload) =>
+    apiRequest<ServiceCatalogResponse['domains'][number]>(API_ENDPOINTS.admin.serviceCatalogDomains(), {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }),
+  updateServiceCatalogDomain: (domainCode: string, payload: UpdateServiceDomainPayload) =>
+    apiRequest<ServiceCatalogResponse['domains'][number]>(API_ENDPOINTS.admin.serviceCatalogDomain(domainCode), {
+      body: JSON.stringify(payload),
+      headers: { 'content-type': 'application/json' },
+      method: 'PATCH',
+    }),
+  archiveServiceCatalogDomain: (domainCode: string) =>
+    apiRequest<ServiceCatalogResponse['domains'][number]>(API_ENDPOINTS.admin.serviceCatalogDomainArchive(domainCode), {
       method: 'POST',
     }),
   createPricingSlab: (payload: PricingSlabPayload) =>

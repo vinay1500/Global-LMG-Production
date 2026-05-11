@@ -10,6 +10,8 @@ import {
   toUiDateTime,
   toUiTime,
 } from '../lib/viewModels.js';
+import type { AdminActor } from './auth/service.js';
+import { getAdminAccessScope } from './access/scope.js';
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
@@ -292,6 +294,25 @@ const AUTOMATIC_REQUEST_ACKNOWLEDGEMENT =
 
 const buildInClause = (values: readonly unknown[]) => values.map(() => '?').join(', ');
 
+const addOptionalInFilter = (
+  where: string[],
+  params: unknown[],
+  expression: string,
+  values: readonly unknown[] | undefined
+) => {
+  if (values === undefined) {
+    return;
+  }
+
+  if (values.length === 0) {
+    where.push('FALSE');
+    return;
+  }
+
+  where.push(`${expression} IN (${buildInClause(values)})`);
+  params.push(...values);
+};
+
 const parseAttachmentRefs = (value: string | null | undefined) =>
   value
     ? value
@@ -303,13 +324,32 @@ const parseAttachmentRefs = (value: string | null | undefined) =>
         .filter((entry): entry is { documentId: string; name: string } => Boolean(entry))
     : undefined;
 
+export const getAdminResponseVisibility = (actor?: AdminActor) => {
+  if (!actor) {
+    return { allowFinancial: true, allowInternal: true, isAssignedOnly: false };
+  }
+
+  const scope = getAdminAccessScope(actor);
+  const isAssignedOnly = scope.isCaseStaff || scope.isAdvocate;
+
+  return {
+    allowFinancial: !isAssignedOnly,
+    allowInternal: !isAssignedOnly,
+    isAssignedOnly,
+  };
+};
+
 export const fetchMatters = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   limit?: number;
+  matterDbIds?: number[];
   matterIds?: string[];
   offset?: number;
   search?: string;
 }) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = ['m.archived_at IS NULL'];
   const params: unknown[] = [];
 
@@ -317,11 +357,13 @@ export const fetchMatters = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
   }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   if (filters.search) {
     where.push('(m.title LIKE ? OR m.matter_number LIKE ? OR ca.display_name LIKE ?)');
@@ -447,10 +489,15 @@ export const fetchMatters = async (filters: {
     {}
   );
 
-  return matterRows.map((row) => ({
-    assignedCounsel: row.assignedCounsel || undefined,
-    assignedStaff: row.assignedStaff || undefined,
-    assignments: (assignmentsByMatterId[row.dbId] || []).map((assignment) => ({
+  return matterRows.map((row) => {
+    const visibleAssignments = (assignmentsByMatterId[row.dbId] || []).filter(
+      (assignment) => visibility.allowInternal || assignment.visibleToClient
+    );
+
+    return {
+    assignedCounsel: visibility.allowInternal ? row.assignedCounsel || undefined : undefined,
+    assignedStaff: visibility.allowInternal ? row.assignedStaff || undefined : undefined,
+    assignments: visibleAssignments.map((assignment) => ({
       id: assignment.id,
       name: assignment.name,
       type: assignment.type,
@@ -461,31 +508,36 @@ export const fetchMatters = async (filters: {
     clientVisibleNotes: updatesByMatterId[row.dbId]?.clientVisibleNotes || [],
     consultationMode: row.consultationMode,
     createdAt: toUiDate(row.createdAt),
-    dueAmount: row.dueAmount,
+    dueAmount: visibility.allowFinancial ? row.dueAmount : undefined,
     expertiseArea: row.expertiseArea,
     id: row.id,
-    internalNotes: updatesByMatterId[row.dbId]?.internalNotes || [],
+    internalNotes: visibility.allowInternal ? updatesByMatterId[row.dbId]?.internalNotes || [] : [],
     issueSummary: row.issueSummary,
     lastUpdated: toUiDate(row.lastUpdated),
     lifecycleStage: row.lifecycleStage,
-    meetingLink: row.meetingLink || undefined,
+    meetingLink: visibility.allowInternal ? row.meetingLink || undefined : undefined,
     operationalStatus: row.operationalStatus,
-    paidAmount: row.paidAmount,
+    paidAmount: visibility.allowFinancial ? row.paidAmount : undefined,
     priority: mapMatterPriority(row.operationalStatus, row.urgency),
     referenceCode: row.matterNumber,
-    selectedServices: servicesByMatterId[row.dbId] || [],
+    selectedServices: visibility.allowFinancial ? servicesByMatterId[row.dbId] || [] : [],
     stages: buildMatterStages(row.lifecycleStage),
     title: row.title,
-    totalFee: row.totalFee,
+    totalFee: visibility.allowFinancial ? row.totalFee : undefined,
     urgency: row.urgency,
-  }));
+    };
+  });
 };
 
 export const fetchMatterOptions = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   limit?: number;
+  matterDbIds?: number[];
   offset?: number;
 } = {}) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = ['m.archived_at IS NULL'];
   const params: unknown[] = [];
 
@@ -493,6 +545,8 @@ export const fetchMatterOptions = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   const rows = await queryRows<MatterOptionRow>(
     `SELECT
@@ -535,7 +589,7 @@ export const fetchMatterOptions = async (filters: {
       clientVisibleNotes: [],
       consultationMode: row.consultationMode || 'video',
       createdAt: toUiDate(row.createdAt),
-      dueAmount: Number(row.dueAmount || 0),
+      dueAmount: visibility.allowFinancial ? Number(row.dueAmount || 0) : undefined,
       expertiseArea: row.expertiseArea || '',
       id: row.id,
       internalNotes: [],
@@ -544,20 +598,22 @@ export const fetchMatterOptions = async (filters: {
       lifecycleStage,
       meetingLink: undefined,
       operationalStatus: row.operationalStatus || 'open',
-      paidAmount: Number(row.paidAmount || 0),
+      paidAmount: visibility.allowFinancial ? Number(row.paidAmount || 0) : undefined,
       priority: mapMatterPriority(row.operationalStatus || 'open', urgency),
       referenceCode: row.matterNumber,
       selectedServices: [],
       stages: buildMatterStages(lifecycleStage),
       title: row.title,
-      totalFee: Number(row.totalFee || 0),
+      totalFee: visibility.allowFinancial ? Number(row.totalFee || 0) : undefined,
       urgency,
     };
   });
 };
 
 export const countMatters = async (filters: {
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
+  matterDbIds?: number[];
   matterIds?: string[];
   search?: string;
 }) => {
@@ -568,11 +624,13 @@ export const countMatters = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
   }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   if (filters.search) {
     where.push('(m.title LIKE ? OR m.matter_number LIKE ? OR ca.display_name LIKE ?)');
@@ -592,8 +650,10 @@ export const countMatters = async (filters: {
 };
 
 export const fetchInvoices = async (filters: {
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   limit?: number;
+  matterDbIds?: number[];
   matterIds?: string[];
   offset?: number;
 }) => {
@@ -604,11 +664,13 @@ export const fetchInvoices = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
   }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   const invoiceRows = await queryRows<InvoiceRow>(
     `SELECT
@@ -782,7 +844,12 @@ export const fetchInvoices = async (filters: {
   }));
 };
 
-export const countInvoices = async (filters: { clientAccountIds?: string[]; matterIds?: string[] }) => {
+export const countInvoices = async (filters: {
+  clientAccountDbIds?: number[];
+  clientAccountIds?: string[];
+  matterDbIds?: number[];
+  matterIds?: string[];
+}) => {
   const where: string[] = ['inv.archived_at IS NULL'];
   const params: unknown[] = [];
 
@@ -790,11 +857,13 @@ export const countInvoices = async (filters: { clientAccountIds?: string[]; matt
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
   }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   const rows = await queryRows<RowDataPacket & { total: number }>(
     `SELECT COUNT(DISTINCT inv.id) AS total
@@ -809,8 +878,10 @@ export const countInvoices = async (filters: { clientAccountIds?: string[]; matt
 };
 
 export const fetchInvoiceSummaries = async (filters: {
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   limit?: number;
+  matterDbIds?: number[];
   matterIds?: string[];
   offset?: number;
 }) => {
@@ -821,11 +892,13 @@ export const fetchInvoiceSummaries = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
   }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   const rows = await queryRows<InvoiceSummaryRow>(
     `SELECT
@@ -878,11 +951,15 @@ export const fetchInvoiceSummaries = async (filters: {
 };
 
 export const fetchDocuments = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   limit?: number;
+  matterDbIds?: number[];
   matterIds?: string[];
   offset?: number;
 }) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = ['d.archived_at IS NULL'];
   const params: unknown[] = [];
 
@@ -890,10 +967,15 @@ export const fetchDocuments = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
+  }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
+  if (!visibility.allowInternal) {
+    where.push(`d.visibility_scope_code <> 'internal-only'`);
   }
 
   const rows = await queryRows<DocumentRow>(
@@ -949,7 +1031,14 @@ export const fetchDocuments = async (filters: {
   }));
 };
 
-export const countDocuments = async (filters: { clientAccountIds?: string[]; matterIds?: string[] }) => {
+export const countDocuments = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
+  clientAccountIds?: string[];
+  matterDbIds?: number[];
+  matterIds?: string[];
+}) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = ['d.archived_at IS NULL'];
   const params: unknown[] = [];
 
@@ -957,10 +1046,15 @@ export const countDocuments = async (filters: { clientAccountIds?: string[]; mat
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
+  }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
+  if (!visibility.allowInternal) {
+    where.push(`d.visibility_scope_code <> 'internal-only'`);
   }
 
   const rows = await queryRows<RowDataPacket & { total: number }>(
@@ -977,12 +1071,16 @@ export const countDocuments = async (filters: { clientAccountIds?: string[]; mat
 };
 
 export const fetchEvents = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   includeCancelled?: boolean;
   limit?: number;
+  matterDbIds?: number[];
   matterIds?: string[];
   offset?: number;
 }) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = filters.includeCancelled ? ['1 = 1'] : ['e.cancelled_at IS NULL'];
   const params: unknown[] = [];
 
@@ -990,10 +1088,15 @@ export const fetchEvents = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
+  }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
+  if (!visibility.allowInternal) {
+    where.push('e.client_visible_flag = 1');
   }
 
   const rows = await queryRows<EventRow>(
@@ -1053,10 +1156,10 @@ export const fetchEvents = async (filters: {
 
   return rows.map((row) => ({
     actionCTA: row.joinUrl ? 'Join Call' : 'View Details',
-    calendarSyncError: row.calendarSyncError || undefined,
+    calendarSyncError: visibility.allowInternal ? row.calendarSyncError || undefined : undefined,
     calendarSyncStatus: row.calendarSyncStatus,
     calendarSyncedAt: row.calendarSyncedAt || undefined,
-    calendarOwnerEmail: row.calendarOwnerEmail || undefined,
+    calendarOwnerEmail: visibility.allowInternal ? row.calendarOwnerEmail || undefined : undefined,
     clientId: row.clientId,
     clientName: row.clientName,
     date: toUiDate(row.dateSource),
@@ -1070,7 +1173,7 @@ export const fetchEvents = async (filters: {
     meetConferenceId: row.meetConferenceId || undefined,
     meetLink: row.joinUrl || undefined,
     mode: row.mode,
-    notes: row.notes || '',
+    notes: visibility.allowInternal ? row.notes || '' : '',
     reminderCount: Number(row.reminderCount || 0),
     reminderStatus: row.reminderStatus,
     status: row.status,
@@ -1082,10 +1185,14 @@ export const fetchEvents = async (filters: {
 };
 
 export const countEvents = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   includeCancelled?: boolean;
+  matterDbIds?: number[];
   matterIds?: string[];
 }) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = filters.includeCancelled ? ['1 = 1'] : ['e.cancelled_at IS NULL'];
   const params: unknown[] = [];
 
@@ -1093,10 +1200,15 @@ export const countEvents = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
+  }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
+  if (!visibility.allowInternal) {
+    where.push('e.client_visible_flag = 1');
   }
 
   const rows = await queryRows<RowDataPacket & { total: number }>(
@@ -1112,12 +1224,16 @@ export const countEvents = async (filters: {
 };
 
 export const fetchThreads = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   limit?: number;
+  matterDbIds?: number[];
   matterIds?: string[];
   offset?: number;
   viewerUserId?: number;
 }) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = ['ct.archived_at IS NULL'];
   const params: unknown[] = [];
   const unreadSelectParams: unknown[] = [];
@@ -1126,10 +1242,22 @@ export const fetchThreads = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
+  }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
+  if (!visibility.allowInternal) {
+    where.push(`
+      EXISTS (
+        SELECT 1
+        FROM messages visible_msg
+        WHERE visible_msg.thread_id = ct.id
+          AND visible_msg.deleted_at IS NULL
+          AND visible_msg.visible_to_client = 1
+      )`);
   }
 
   const unreadCountSelect = filters.viewerUserId
@@ -1144,6 +1272,7 @@ export const fetchThreads = async (filters: {
         AND unread_read.user_id = ?
        WHERE unread_msg.thread_id = ct.id
          AND unread_msg.deleted_at IS NULL
+         ${visibility.allowInternal ? '' : 'AND unread_msg.visible_to_client = 1'}
          AND (unread_msg.sender_user_id IS NULL OR unread_msg.sender_user_id <> ?)
          AND unread_read.id IS NULL
      ) AS unreadCount`
@@ -1179,7 +1308,9 @@ export const fetchThreads = async (filters: {
      LEFT JOIN messages lm ON lm.id = (
        SELECT m2.id
        FROM messages m2
-       WHERE m2.thread_id = ct.id AND m2.deleted_at IS NULL
+       WHERE m2.thread_id = ct.id
+         AND m2.deleted_at IS NULL
+         ${visibility.allowInternal ? '' : 'AND m2.visible_to_client = 1'}
        ORDER BY m2.sent_at DESC, m2.id DESC
        LIMIT 1
      )`;
@@ -1212,7 +1343,7 @@ export const fetchThreads = async (filters: {
       );
 
   return rows.map((row) => ({
-    assignedTo: row.assignedTo || 'Unassigned',
+    assignedTo: visibility.allowInternal ? row.assignedTo || 'Unassigned' : 'Unassigned',
     clientId: row.clientId,
     clientName: row.clientName,
     id: row.id,
@@ -1228,7 +1359,14 @@ export const fetchThreads = async (filters: {
   }));
 };
 
-export const countThreads = async (filters: { clientAccountIds?: string[]; matterIds?: string[] }) => {
+export const countThreads = async (filters: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
+  clientAccountIds?: string[];
+  matterDbIds?: number[];
+  matterIds?: string[];
+}) => {
+  const visibility = getAdminResponseVisibility(filters.actor);
   const where: string[] = ['ct.archived_at IS NULL'];
   const params: unknown[] = [];
 
@@ -1236,10 +1374,22 @@ export const countThreads = async (filters: { clientAccountIds?: string[]; matte
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.matterIds?.length) {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
+  }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
+  if (!visibility.allowInternal) {
+    where.push(`
+      EXISTS (
+        SELECT 1
+        FROM messages visible_msg
+        WHERE visible_msg.thread_id = ct.id
+          AND visible_msg.deleted_at IS NULL
+          AND visible_msg.visible_to_client = 1
+      )`);
   }
 
   const rows = await queryRows<RowDataPacket & { total: number }>(
@@ -1254,11 +1404,12 @@ export const countThreads = async (filters: { clientAccountIds?: string[]; matte
   return Number(rows[0]?.total || 0);
 };
 
-export const fetchMessagesByThreadIds = async (threadIds: string[]) => {
+export const fetchMessagesByThreadIds = async (threadIds: string[], actor?: AdminActor) => {
   if (threadIds.length === 0) {
     return [];
   }
 
+  const visibility = getAdminResponseVisibility(actor);
   const rows = await queryRows<MessageRow>(
     `SELECT
        msg.public_id AS id,
@@ -1291,9 +1442,12 @@ export const fetchMessagesByThreadIds = async (threadIds: string[]) => {
      LEFT JOIN counsel_partners cp ON cp.id = msg.sender_counsel_partner_id
      LEFT JOIN message_document_versions mdv ON mdv.message_id = msg.id
      LEFT JOIN document_versions dv ON dv.id = mdv.document_version_id
-     LEFT JOIN documents d ON d.id = dv.document_id
+     LEFT JOIN documents d
+       ON d.id = dv.document_id
+      ${visibility.allowInternal ? '' : "AND d.visibility_scope_code <> 'internal-only'"}
      WHERE msg.deleted_at IS NULL
        AND ct.public_id IN (${buildInClause(threadIds)})
+       ${visibility.allowInternal ? '' : 'AND msg.visible_to_client = 1'}
      GROUP BY
        msg.id,
        msg.public_id,
@@ -1329,8 +1483,10 @@ export const fetchMessagesByThreadIds = async (threadIds: string[]) => {
 };
 
 export const fetchPayments = async (filters: {
+  clientAccountDbIds?: number[];
   clientAccountIds?: string[];
   invoiceIds?: string[];
+  matterDbIds?: number[];
   matterIds?: string[];
 } = {}) => {
   const where: string[] = [];
@@ -1340,6 +1496,7 @@ export const fetchPayments = async (filters: {
     where.push(`ca.public_id IN (${buildInClause(filters.clientAccountIds)})`);
     params.push(...filters.clientAccountIds);
   }
+  addOptionalInFilter(where, params, 'ca.id', filters.clientAccountDbIds);
 
   if (filters.invoiceIds?.length) {
     where.push(`inv.public_id IN (${buildInClause(filters.invoiceIds)})`);
@@ -1350,6 +1507,7 @@ export const fetchPayments = async (filters: {
     where.push(`m.public_id IN (${buildInClause(filters.matterIds)})`);
     params.push(...filters.matterIds);
   }
+  addOptionalInFilter(where, params, 'm.id', filters.matterDbIds);
 
   const rows = await queryRows<PaymentRow>(
     `SELECT
@@ -1440,16 +1598,26 @@ export const fetchClientAudit = async (matterPublicIds: string[]) => {
   }));
 };
 
-export const fetchClientsForList = async (options: { limit: number; offset: number; search?: string }) => {
+export const fetchClientsForList = async (options: {
+  actor?: AdminActor;
+  clientAccountDbIds?: number[];
+  limit: number;
+  offset: number;
+  search?: string;
+}) => {
+  const visibility = getAdminResponseVisibility(options.actor);
   const params: unknown[] = [];
+  const where: string[] = ['ca.archived_at IS NULL'];
   const searchClause = options.search
-    ? `AND (ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
+    ? `(ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
     : '';
 
   if (options.search) {
     const searchValue = `%${options.search}%`;
+    where.push(searchClause);
     params.push(searchValue, searchValue, searchValue);
   }
+  addOptionalInFilter(where, params, 'ca.id', options.clientAccountDbIds);
 
   const rows = await queryRows<
     RowDataPacket & {
@@ -1516,10 +1684,9 @@ export const fetchClientsForList = async (options: { limit: number; offset: numb
        WHERE archived_at IS NULL AND status_code = 'waiting'
        GROUP BY client_account_id
      ) AS tstats ON tstats.client_account_id = ca.id
-     WHERE ca.archived_at IS NULL
-       ${searchClause}
-     ORDER BY ca.updated_at DESC
-     LIMIT ? OFFSET ?`,
+	     WHERE ${where.join(' AND ')}
+	     ORDER BY ca.updated_at DESC
+	     LIMIT ? OFFSET ?`,
     [...params, options.limit, options.offset]
   );
 
@@ -1536,20 +1703,28 @@ export const fetchClientsForList = async (options: { limit: number; offset: numb
     owner: row.owner || 'Unassigned',
     phone: row.phone,
     region: row.region || '',
-    totalDue: row.totalDue,
+    totalDue: visibility.allowFinancial ? row.totalDue : undefined,
   }));
 };
 
-export const fetchClientOptions = async (options: { limit: number; offset: number; search?: string }) => {
+export const fetchClientOptions = async (options: {
+  clientAccountDbIds?: number[];
+  limit: number;
+  offset: number;
+  search?: string;
+}) => {
   const params: unknown[] = [];
+  const where: string[] = ['ca.archived_at IS NULL'];
   const searchClause = options.search
-    ? `AND (ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
+    ? `(ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
     : '';
 
   if (options.search) {
     const searchValue = `%${options.search}%`;
+    where.push(searchClause);
     params.push(searchValue, searchValue, searchValue);
   }
+  addOptionalInFilter(where, params, 'ca.id', options.clientAccountDbIds);
 
   const rows = await queryRows<ClientOptionRow>(
     `SELECT
@@ -1574,10 +1749,9 @@ export const fetchClientOptions = async (options: { limit: number; offset: numbe
        ON addr.client_account_id = ca.id
       AND addr.is_primary = 1
       AND addr.archived_at IS NULL
-     WHERE ca.archived_at IS NULL
-       ${searchClause}
-     ORDER BY ca.updated_at DESC
-     LIMIT ? OFFSET ?`,
+	     WHERE ${where.join(' AND ')}
+	     ORDER BY ca.updated_at DESC
+	     LIMIT ? OFFSET ?`,
     [...params, options.limit, options.offset]
   );
 
@@ -1596,22 +1770,27 @@ export const fetchClientOptions = async (options: { limit: number; offset: numbe
   }));
 };
 
-export const countClientsForList = async (options: { search?: string } = {}) => {
+export const countClientsForList = async (options: {
+  clientAccountDbIds?: number[];
+  search?: string;
+} = {}) => {
   const params: unknown[] = [];
+  const where: string[] = ['ca.archived_at IS NULL'];
   const searchClause = options.search
-    ? `AND (ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
+    ? `(ca.display_name LIKE ? OR ca.primary_email LIKE ? OR ca.primary_phone LIKE ?)`
     : '';
 
   if (options.search) {
     const searchValue = `%${options.search}%`;
+    where.push(searchClause);
     params.push(searchValue, searchValue, searchValue);
   }
+  addOptionalInFilter(where, params, 'ca.id', options.clientAccountDbIds);
 
   const rows = await queryRows<RowDataPacket & { total: number }>(
     `SELECT COUNT(*) AS total
      FROM client_accounts ca
-     WHERE ca.archived_at IS NULL
-       ${searchClause}`,
+	     WHERE ${where.join(' AND ')}`,
     params
   );
 

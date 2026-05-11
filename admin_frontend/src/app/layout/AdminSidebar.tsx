@@ -1,7 +1,7 @@
 import React from 'react';
 import { LogOut } from 'lucide-react';
 import { NavLink } from 'react-router';
-import { ADMIN_NAV_ITEMS } from '../config/navigation';
+import { ADMIN_NAV_ITEMS, canViewNavItem } from '../config/navigation';
 import { useAdminSession } from '../providers/AdminSessionProvider';
 
 type AdminSidebarProps = {
@@ -11,9 +11,7 @@ type AdminSidebarProps = {
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({ onNavigate, onSignOut }) => {
   const { currentUser } = useAdminSession();
-  const visibleItems = ADMIN_NAV_ITEMS.filter(
-    (item) => !item.permission || currentUser?.permissionCodes.includes(item.permission)
-  );
+  const visibleItems = ADMIN_NAV_ITEMS.filter((item) => canViewNavItem(currentUser?.permissionCodes, item));
 
   return (
     <aside className="fixed lg:sticky top-16 left-0 h-[calc(100vh-64px)] w-64 bg-[#F4F1EA] border-r border-[#E6E4DD] z-50 flex flex-col">

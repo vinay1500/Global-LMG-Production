@@ -15,6 +15,7 @@
     "smoke:idempotency": "tsx src/scripts/idempotencySmoke.ts",
     "smoke:sentry": "tsx src/scripts/sentrySmoke.ts",
     "smoke:webhook-signatures": "tsx src/scripts/webhookSignatureSmoke.ts",
+    "revoke:unsafe-sessions": "tsx src/scripts/revokeUnsafeAdminSessions.ts",
     "reminders:process": "tsx src/scripts/processReminders.ts",
     "start": "node dist/server.js",
     "lint": "node ../node_modules/eslint/bin/eslint.js src --cache --cache-location .eslintcache",

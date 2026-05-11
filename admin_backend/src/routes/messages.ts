@@ -5,7 +5,11 @@ import { sendPrivateJsonWithEtag } from '../lib/httpCache.js';
 import { isMessageContentWithinLimit, sanitizeMessageContent } from '../lib/messageContent.js';
 import { archiveThread, createThread, getWorkspace, markThreadRead, replyToThread } from '../modules/messages/service.js';
 import { parsePaginationQuery } from './queryValidation.js';
-import { requireMutationPermission, requireReadPermission } from './shared.js';
+import {
+  requireAnyMutationPermission,
+  requireAnyReadPermission,
+  requireMutationPermission,
+} from './shared.js';
 
 export const messagesRouter = Router();
 const ADMIN_MESSAGE_CONTENT_MAX_LENGTH = 4000;
@@ -34,7 +38,10 @@ const createThreadSchema = z.object({
 messagesRouter.get(
   '/messages/workspace',
   asyncHandler(async (request, response) => {
-    const actor = await requireReadPermission(request, 'message.send');
+    const actor = await requireAnyReadPermission(request, [
+      'message.view',
+      'message.view_assigned',
+    ]);
     const payload = await getWorkspace(actor, parsePaginationQuery(request.query));
     sendPrivateJsonWithEtag(request, response, {
       actor,
@@ -47,7 +54,10 @@ messagesRouter.get(
 messagesRouter.post(
   '/messages/threads',
   asyncHandler(async (request, response) => {
-    const actor = await requireMutationPermission(request, 'message.send');
+    const actor = await requireAnyMutationPermission(request, [
+      'message.send',
+      'message.send_assigned',
+    ]);
     response.status(201).json(await createThread(actor, createThreadSchema.parse(request.body)));
   })
 );
@@ -55,7 +65,10 @@ messagesRouter.post(
 messagesRouter.post(
   '/messages/:threadId/replies',
   asyncHandler(async (request, response) => {
-    const actor = await requireMutationPermission(request, 'message.send');
+    const actor = await requireAnyMutationPermission(request, [
+      'message.send',
+      'message.send_assigned',
+    ]);
     response.status(201).json(
       await replyToThread(actor, {
         ...replySchema.parse(request.body),
@@ -68,7 +81,10 @@ messagesRouter.post(
 messagesRouter.post(
   '/messages/:threadId/read',
   asyncHandler(async (request, response) => {
-    const actor = await requireMutationPermission(request, 'message.send');
+    const actor = await requireAnyMutationPermission(request, [
+      'message.view',
+      'message.view_assigned',
+    ]);
     response.json(await markThreadRead(actor, String(request.params.threadId || '')));
   })
 );

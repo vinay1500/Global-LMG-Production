@@ -14,11 +14,13 @@ type DirectoryClient = PlatformUser | ClientListItem;
 
 export const ClientDirectory = ({ 
   clients = [],
+  assignedScope = false,
   createRequested,
   onCreateClient,
   onCreateRequestHandled,
   onSelectClient 
 }: { 
+  assignedScope?: boolean;
   clients?: DirectoryClient[];
   createRequested?: boolean;
   onCreateClient?: (payload: CreateClientPayload) => Promise<CreateClientResponse>;
@@ -358,9 +360,17 @@ export const ClientDirectory = ({
               <div className="bg-white rounded-xl border border-[#E6E4DD] shadow-sm flex items-center justify-center p-12">
                 <EmptyState 
                   icon={Search} 
-                  title="No clients found" 
-                  description="We couldn't find any clients matching your filters or search query."
-                  action={{ label: "Clear Search & Filters", onClick: () => { setSearchQuery(''); setActiveFilters({ lifecycle: 'all', balance: 'all', matters: 'all', messages: 'all', activity: 'all' }) } }}
+                  title={assignedScope && clients.length === 0 ? 'No assigned clients yet.' : 'No clients found'}
+                  description={
+                    assignedScope && clients.length === 0
+                      ? 'Assigned clients will appear here once you are linked to their matters.'
+                      : "We couldn't find any clients matching your filters or search query."
+                  }
+                  action={
+                    assignedScope && clients.length === 0
+                      ? undefined
+                      : { label: "Clear Search & Filters", onClick: () => { setSearchQuery(''); setActiveFilters({ lifecycle: 'all', balance: 'all', matters: 'all', messages: 'all', activity: 'all' }) } }
+                  }
                 />
               </div>
             ) : viewMode === 'list' ? (

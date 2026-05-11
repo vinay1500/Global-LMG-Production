@@ -4,7 +4,7 @@ import { asyncHandler } from '../lib/httpErrors.js';
 import { runIdempotentJson } from '../lib/idempotency.js';
 import { createClient, getClientWorkspace, listClients } from '../modules/clients/service.js';
 import { parseOptionalSearchQuery, parsePaginationQuery } from './queryValidation.js';
-import { requireMutationPermission, requireReadPermission } from './shared.js';
+import { requireAnyReadPermission, requireMutationPermission } from './shared.js';
 
 export const clientsRouter = Router();
 
@@ -23,9 +23,12 @@ const createClientSchema = z.object({
 clientsRouter.get(
   '/clients',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'client_account.view');
+    const actor = await requireAnyReadPermission(request, [
+      'client_account.view',
+      'client_account.view_assigned',
+    ]);
     response.json(
-      await listClients({
+      await listClients(actor, {
         ...parsePaginationQuery(request.query),
         search: parseOptionalSearchQuery(request.query.search),
       })
@@ -53,7 +56,10 @@ clientsRouter.post(
 clientsRouter.get(
   '/clients/:clientAccountId',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'client_account.view');
-    response.json(await getClientWorkspace(String(request.params.clientAccountId || '')));
+    const actor = await requireAnyReadPermission(request, [
+      'client_account.view',
+      'client_account.view_assigned',
+    ]);
+    response.json(await getClientWorkspace(actor, String(request.params.clientAccountId || '')));
   })
 );

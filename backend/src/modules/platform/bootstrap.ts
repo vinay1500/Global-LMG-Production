@@ -1,10 +1,10 @@
-import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
+import type { PoolConnection } from 'mysql2/promise';
 import { env } from '../../config/env.js';
 import { nowUtc, toMysqlDateTime } from '../../lib/datetime.js';
 import { createPublicId } from '../../lib/ids.js';
 import { ensureDatabaseMigrations } from '../../lib/migrations.js';
 import { getMysqlPool } from '../../lib/mysql.js';
-import { selectOne, withTransaction } from '../../lib/mysqlUtils.js';
+import { withTransaction } from '../../lib/mysqlUtils.js';
 import {
   CONSULTATION_MODE_SEEDS,
   EVENT_STATUS_SEEDS,
@@ -25,10 +25,6 @@ import {
   TAX_RATE_SEEDS,
   THREAD_STATUS_SEEDS,
 } from './referenceData.js';
-
-interface IdRow extends RowDataPacket {
-  id: number;
-}
 
 let platformBootstrapPromise: Promise<void> | null = null;
 
@@ -51,21 +47,6 @@ const upsertLookup = async (
       row
     );
   }
-};
-
-const getIdByUnique = async (
-  connection: PoolConnection,
-  tableName: string,
-  column: string,
-  value: string
-) => {
-  const row = await selectOne<IdRow>(
-    connection,
-    `SELECT id FROM ${tableName} WHERE ${column} = ? LIMIT 1`,
-    [value]
-  );
-
-  return row?.id;
 };
 
 const seedReferenceData = async (connection: PoolConnection) => {
@@ -223,32 +204,22 @@ const seedReferenceData = async (connection: PoolConnection) => {
         public_id, domain_code, domain_name, sort_order, is_active, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        domain_name = VALUES(domain_name),
-        sort_order = VALUES(sort_order),
-        is_active = VALUES(is_active),
-        updated_at = VALUES(updated_at)`,
+        domain_code = domain_code`,
       [createPublicId(), code, name, sortOrder, 1, timestamp, timestamp]
     );
   }
 
-  for (const [serviceCode, domainCode, serviceName, serviceDescription, sortOrder, isSubEligible] of SERVICE_SEEDS) {
-    const legalDomainId = await getIdByUnique(connection, 'legal_domains', 'domain_code', domainCode);
-
-    if (!legalDomainId) {
-      throw new Error(`Missing legal domain seed for service ${serviceCode}.`);
-    }
-
+  for (const [serviceCode, , serviceName, serviceDescription, sortOrder, isSubEligible] of SERVICE_SEEDS) {
     await connection.execute(
       `INSERT INTO services (
-        public_id, service_code, legal_domain_id, service_name, service_description, sort_order,
+        public_id, service_code, service_name, service_description, sort_order,
         is_active, is_subscription_eligible, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         service_code = service_code`,
       [
         createPublicId(),
         serviceCode,
-        legalDomainId,
         serviceName,
         serviceDescription,
         sortOrder,

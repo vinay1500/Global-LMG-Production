@@ -6,12 +6,18 @@ import { WorkspaceState } from '../../components/shared/WorkspaceState';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
 import { adminApi } from '../../lib/api/admin';
 import { MatterDeskAdmin } from '../../modules/MatterDeskAdmin';
+import { useAdminSession } from '../../providers/AdminSessionProvider';
 
 export const MattersPage = () => {
   const navigate = useNavigate();
+  const { currentUser } = useAdminSession();
   const [searchParams, setSearchParams] = useSearchParams();
   const [offset, setOffset] = useState(0);
   const limit = 50;
+  const permissionCodes = currentUser?.permissionCodes || [];
+  const canCreateMatter = permissionCodes.includes('matter.update');
+  const assignedMatterScope =
+    permissionCodes.includes('matter.view_assigned') && !permissionCodes.includes('matter.view');
   const { data, errorMessage, isLoading, refresh } = useAsyncResource(
     () => adminApi.listMatters({ limit, offset }),
     [limit, offset]
@@ -79,17 +85,22 @@ export const MattersPage = () => {
   return (
     <>
       <MatterDeskAdmin
+        assignedScope={assignedMatterScope}
         clients={clients}
         createOptions={data?.createOptions}
-        createRequested={searchParams.get('action') === 'new'}
+        createRequested={canCreateMatter && searchParams.get('action') === 'new'}
         matters={data?.matters || []}
-        onCreateMatter={async (payload) => {
-          const response = await adminApi.createMatter(payload);
-          setOffset(0);
-          await refresh().catch(() => undefined);
-          navigate(`/matters/${response.matter.id}`);
-          return response;
-        }}
+        onCreateMatter={
+          canCreateMatter
+            ? async (payload) => {
+                const response = await adminApi.createMatter(payload);
+                setOffset(0);
+                await refresh().catch(() => undefined);
+                navigate(`/matters/${response.matter.id}`);
+                return response;
+              }
+            : undefined
+        }
         onCreateRequestHandled={() => setSearchParams({})}
         onViewMatter={(matter) => navigate(`/matters/${matter.id}`)}
         preselectedClientId={searchParams.get('clientId') || undefined}

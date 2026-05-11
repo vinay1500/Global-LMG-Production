@@ -17,8 +17,24 @@ import type {
   SystemNotification,
 } from '../data/adminTypes';
 import { StatusBadge, UrgencyDot } from '../components/dashboard/StatusBadge';
+import {
+  DOCUMENT_ROUTE_PERMISSIONS,
+  EVENT_ROUTE_PERMISSIONS,
+  MATTER_ROUTE_PERMISSIONS,
+  MESSAGE_ROUTE_PERMISSIONS,
+} from '../config/navigation';
 import { EmptyState } from './EmptyState';
 import type { AdminRequestRecord, ClientWorkspaceResponse } from '../lib/api/contracts';
+
+type ClientDetailTab =
+  | 'overview'
+  | 'requests'
+  | 'matters'
+  | 'billing'
+  | 'documents'
+  | 'messages'
+  | 'meetings'
+  | 'activity';
 
 interface ClientDetailAdminProps {
   client: PlatformUser;
@@ -26,6 +42,7 @@ interface ClientDetailAdminProps {
   invoices: Invoice[];
   notifications?: SystemNotification[];
   payments?: Payment[];
+  permissionCodes?: string[];
   requests?: AdminRequestRecord[];
   summary?: ClientWorkspaceResponse['summary'];
   documents: PlatformDocument[];
@@ -43,6 +60,7 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
   invoices,
   notifications = [],
   payments = [],
+  permissionCodes = [],
   requests = [],
   summary,
   documents,
@@ -53,8 +71,16 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
   onCreateMatter,
   onViewMatter
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'requests' | 'matters' | 'billing' | 'documents' | 'messages' | 'meetings' | 'activity'>('overview');
-
+  const [activeTab, setActiveTab] = useState<ClientDetailTab>('overview');
+  const hasPermission = (permission: string) => permissionCodes.includes(permission);
+  const hasAnyPermission = (permissions: string[]) => permissions.some((permission) => permissionCodes.includes(permission));
+  const canViewRequests = hasPermission('matter.view');
+  const canViewMatters = hasAnyPermission(MATTER_ROUTE_PERMISSIONS);
+  const canViewBilling = hasAnyPermission(['invoice.view', 'payment.view', 'refund.view']);
+  const canViewDocuments = hasAnyPermission(DOCUMENT_ROUTE_PERMISSIONS);
+  const canViewMessages = hasAnyPermission(MESSAGE_ROUTE_PERMISSIONS);
+  const canViewMeetings = hasAnyPermission(EVENT_ROUTE_PERMISSIONS);
+  const canViewActivity = hasAnyPermission(['notification.view', 'audit.view']);
   const totalBilled = summary?.totalBilled ?? invoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
   const totalPaid =
     summary?.totalPaid ??
@@ -69,6 +95,16 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
     .sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`));
   const clientAudit = auditEntries.slice(0, 5);
   const successfulPayments = payments.filter((payment) => payment.status === 'success');
+  const visibleTabs: Array<{ id: ClientDetailTab; label: string }> = [
+    { id: 'overview', label: 'Client 360 Overview' },
+    canViewRequests ? { id: 'requests', label: `Requests (${requests.length})` } : null,
+    canViewMatters ? { id: 'matters', label: `Matters (${matters.length})` } : null,
+    canViewMessages ? { id: 'messages', label: `Messages (${clientThreads.length})` } : null,
+    canViewDocuments ? { id: 'documents', label: `Vault (${documents.length})` } : null,
+    canViewBilling ? { id: 'billing', label: `Billing & Ledger (${invoices.length})` } : null,
+    canViewMeetings ? { id: 'meetings', label: `Meetings (${events.length})` } : null,
+    canViewActivity ? { id: 'activity', label: `Activity (${auditEntries.length + notifications.length})` } : null,
+  ].filter((tab): tab is { id: ClientDetailTab; label: string } => Boolean(tab));
 
   return (
     <div className="space-y-6">
@@ -118,19 +154,10 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
 
       {/* Tabs (Original Design Restored + new tabs) */}
       <div className="flex gap-6 border-b border-gray-200 overflow-x-auto no-scrollbar">
-        {[
-          { id: 'overview', label: 'Client 360 Overview' },
-          { id: 'requests', label: `Requests (${requests.length})` },
-          { id: 'matters', label: `Matters (${matters.length})` },
-          { id: 'messages', label: `Messages (${clientThreads.length})` },
-          { id: 'documents', label: `Vault (${documents.length})` },
-          { id: 'billing', label: `Billing & Ledger (${invoices.length})` },
-          { id: 'meetings', label: `Meetings (${events.length})` },
-          { id: 'activity', label: `Activity (${auditEntries.length + notifications.length})` }
-        ].map(tab => (
+        {visibleTabs.map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
+            onClick={() => setActiveTab(tab.id)}
             className={`pb-3 text-sm font-medium transition border-b-2 whitespace-nowrap ${activeTab === tab.id ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             {tab.label}
@@ -168,9 +195,10 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
                 </div>
               </div>
 
-              {/* Added Recent Messages & Documents Grid below */}
+              {canViewMessages || canViewDocuments ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Recent Messages */}
+                {canViewMessages ? (
                 <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden flex flex-col">
                   <div className="p-4 border-b border-gray-100 flex items-center justify-between">
                     <h3 className="font-bold text-gray-900 flex items-center gap-2 text-sm">
@@ -210,8 +238,10 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
                     <button onClick={() => setActiveTab('messages')} className="text-xs font-medium text-blue-600 hover:text-blue-700">View all messages &rarr;</button>
                   </div>
                 </div>
+                ) : null}
 
                 {/* Recent Documents */}
+                {canViewDocuments ? (
                 <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden flex flex-col">
                   <div className="p-4 border-b border-gray-100 flex items-center justify-between">
                     <h3 className="font-bold text-gray-900 flex items-center gap-2 text-sm">
@@ -253,13 +283,16 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
                     <button onClick={() => setActiveTab('documents')} className="text-xs font-medium text-amber-600 hover:text-amber-700">Open Vault &rarr;</button>
                   </div>
                 </div>
+                ) : null}
               </div>
+              ) : null}
             </div>
 
             {/* Right Column: Financial Snapshot, Meetings, Activity */}
             <div className="space-y-6">
               
               {/* Financial Snapshot */}
+              {canViewBilling ? (
               <div className="bg-gray-900 text-white rounded-xl p-6 shadow-md">
                 <h3 className="text-sm font-medium text-gray-400 mb-4 flex items-center gap-2">
                   <CreditCard className="w-4 h-4" /> Financial Snapshot
@@ -288,8 +321,10 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
                   </div>
                 </div>
               </div>
+              ) : null}
 
               {/* Upcoming Meetings */}
+              {canViewMeetings ? (
               <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-5">
                 <h3 className="font-bold text-gray-900 flex items-center gap-2 mb-4 text-sm">
                   <Calendar className="w-4 h-4 text-gray-500" /> Upcoming Meetings
@@ -314,8 +349,10 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
                   </button>
                 </div>
               </div>
+              ) : null}
 
               {/* Activity Timeline */}
+              {canViewActivity ? (
               <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-5">
                 <h3 className="font-bold text-gray-900 flex items-center gap-2 mb-4 text-sm">
                   <History className="w-4 h-4 text-gray-500" /> Recent Activity
@@ -336,6 +373,7 @@ export const ClientDetailAdmin: React.FC<ClientDetailAdminProps> = ({
                   View Full Timeline
                 </button>
               </div>
+              ) : null}
 
             </div>
           </div>

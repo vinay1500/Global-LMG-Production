@@ -292,6 +292,44 @@ const clearSignInFailures = async (identifier: string) => {
 const getActiveSessionLimitSql = () =>
   String(Math.max(1, Math.trunc(env.MAX_ACTIVE_SESSIONS_PER_USER)));
 
+const ADMIN_OPERATIONAL_PROFILE_GUARD_SQL = `
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_roles staff_guard_ur
+         WHERE staff_guard_ur.user_id = u.id
+           AND staff_guard_ur.role_code IN ('case_staff', 'field_staff', 'internal_staff')
+           AND staff_guard_ur.is_active = 1
+           AND (staff_guard_ur.starts_at IS NULL OR staff_guard_ur.starts_at <= UTC_TIMESTAMP(6))
+           AND (staff_guard_ur.ends_at IS NULL OR staff_guard_ur.ends_at >= UTC_TIMESTAMP(6))
+           AND NOT EXISTS (
+             SELECT 1
+             FROM staff_profiles staff_guard_sp
+             WHERE staff_guard_sp.user_id = u.id
+               AND staff_guard_sp.employment_status_code = 'active'
+           )
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_roles advocate_guard_ur
+         WHERE advocate_guard_ur.user_id = u.id
+           AND advocate_guard_ur.role_code = 'advocate'
+           AND advocate_guard_ur.is_active = 1
+           AND (advocate_guard_ur.starts_at IS NULL OR advocate_guard_ur.starts_at <= UTC_TIMESTAMP(6))
+           AND (advocate_guard_ur.ends_at IS NULL OR advocate_guard_ur.ends_at >= UTC_TIMESTAMP(6))
+           AND NOT EXISTS (
+             SELECT 1
+             FROM counsel_partner_users advocate_guard_cpu
+             INNER JOIN counsel_partners advocate_guard_cp
+               ON advocate_guard_cp.id = advocate_guard_cpu.counsel_partner_id
+              AND advocate_guard_cp.archived_at IS NULL
+              AND advocate_guard_cp.partner_status_code = 'active'
+              AND COALESCE(advocate_guard_cp.partner_type_code, 'external_counsel') = 'external_counsel'
+             WHERE advocate_guard_cpu.user_id = u.id
+               AND advocate_guard_cpu.relationship_status_code = 'active'
+               AND advocate_guard_cpu.archived_at IS NULL
+           )
+       )`;
+
 const getMfaRateLimitKeys = (scope: string, request: Request, identifier?: string) => [
   {
     key: `${scope}:ip:${getRequestIpAddress(request) || 'unknown'}`,
@@ -321,7 +359,7 @@ const collectActor = (rows: Array<ActorRow | SessionRow>) => {
     new Set(rows.map((row) => row.role_code).filter((value): value is string => Boolean(value)))
   ).filter((roleCode) => roleCode !== 'client');
 
-  if (!first.login_enabled || roleCodes.length === 0) {
+  if (!first.login_enabled || first.account_status_code !== 'active' || roleCodes.length === 0) {
     return null;
   }
 
@@ -406,6 +444,59 @@ export const pruneActiveSessionsForUser = async (
   );
 };
 
+export const revokeUnsafeAdminSessions = async (executor?: QueryExecutor) =>
+  executeStatement<ResultSetHeader>(
+    `UPDATE user_sessions us
+     INNER JOIN users u ON u.id = us.user_id
+        SET us.revoked_at = UTC_TIMESTAMP(6),
+            us.updated_at = UTC_TIMESTAMP(6)
+      WHERE us.revoked_at IS NULL
+        AND (
+          u.archived_at IS NOT NULL
+          OR u.login_enabled = 0
+          OR u.account_status_code <> 'active'
+          OR u.actor_type_code = 'client'
+          OR EXISTS (
+            SELECT 1
+            FROM user_roles staff_cleanup_ur
+            WHERE staff_cleanup_ur.user_id = u.id
+              AND staff_cleanup_ur.role_code IN ('case_staff', 'field_staff', 'internal_staff')
+              AND staff_cleanup_ur.is_active = 1
+              AND (staff_cleanup_ur.starts_at IS NULL OR staff_cleanup_ur.starts_at <= UTC_TIMESTAMP(6))
+              AND (staff_cleanup_ur.ends_at IS NULL OR staff_cleanup_ur.ends_at >= UTC_TIMESTAMP(6))
+              AND NOT EXISTS (
+                SELECT 1
+                FROM staff_profiles staff_cleanup_sp
+                WHERE staff_cleanup_sp.user_id = u.id
+                  AND staff_cleanup_sp.employment_status_code = 'active'
+              )
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM user_roles advocate_cleanup_ur
+            WHERE advocate_cleanup_ur.user_id = u.id
+              AND advocate_cleanup_ur.role_code = 'advocate'
+              AND advocate_cleanup_ur.is_active = 1
+              AND (advocate_cleanup_ur.starts_at IS NULL OR advocate_cleanup_ur.starts_at <= UTC_TIMESTAMP(6))
+              AND (advocate_cleanup_ur.ends_at IS NULL OR advocate_cleanup_ur.ends_at >= UTC_TIMESTAMP(6))
+              AND NOT EXISTS (
+                SELECT 1
+                FROM counsel_partner_users advocate_cleanup_cpu
+                INNER JOIN counsel_partners advocate_cleanup_cp
+                  ON advocate_cleanup_cp.id = advocate_cleanup_cpu.counsel_partner_id
+                 AND advocate_cleanup_cp.archived_at IS NULL
+                 AND advocate_cleanup_cp.partner_status_code = 'active'
+                 AND COALESCE(advocate_cleanup_cp.partner_type_code, 'external_counsel') = 'external_counsel'
+                WHERE advocate_cleanup_cpu.user_id = u.id
+                  AND advocate_cleanup_cpu.relationship_status_code = 'active'
+                  AND advocate_cleanup_cpu.archived_at IS NULL
+              )
+          )
+        )`,
+    [],
+    executor
+  );
+
 const fetchActorByIdentifier = async (identifier: string) => {
   const rows = await queryRows<ActorRow>(
     `SELECT
@@ -433,7 +524,9 @@ const fetchActorByIdentifier = async (identifier: string) => {
      LEFT JOIN role_permissions rp ON rp.role_code = r.code
      WHERE (u.email = ? OR u.phone = ?)
        AND u.archived_at IS NULL
-       AND u.actor_type_code <> 'client'`,
+       AND u.account_status_code = 'active'
+       AND u.actor_type_code <> 'client'
+       ${ADMIN_OPERATIONAL_PROFILE_GUARD_SQL}`,
     [identifier, identifier]
   );
 
@@ -470,7 +563,9 @@ const fetchActorByUserId = async (userId: number, executor?: QueryExecutor) => {
      LEFT JOIN role_permissions rp ON rp.role_code = r.code
      WHERE u.id = ?
        AND u.archived_at IS NULL
-       AND u.actor_type_code <> 'client'`,
+       AND u.account_status_code = 'active'
+       AND u.actor_type_code <> 'client'
+       ${ADMIN_OPERATIONAL_PROFILE_GUARD_SQL}`,
     [userId],
     executor
   );
@@ -640,7 +735,9 @@ const fetchActorBySessionToken = async (rawSessionToken: string) => {
        AND us.revoked_at IS NULL
        AND us.expires_at > UTC_TIMESTAMP(6)
        AND u.archived_at IS NULL
-       AND u.actor_type_code <> 'client'`,
+       AND u.account_status_code = 'active'
+       AND u.actor_type_code <> 'client'
+       ${ADMIN_OPERATIONAL_PROFILE_GUARD_SQL}`,
     [hashedToken]
   );
 
@@ -679,7 +776,9 @@ const fetchPasswordResetToken = async (token: string) => {
      WHERE prt.public_id = ?
        AND u.archived_at IS NULL
        AND u.login_enabled = 1
+       AND u.account_status_code = 'active'
        AND u.actor_type_code <> 'client'
+       ${ADMIN_OPERATIONAL_PROFILE_GUARD_SQL}
        AND EXISTS (
          SELECT 1
            FROM user_roles ur

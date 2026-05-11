@@ -197,9 +197,9 @@ export const updateAdminProfile = async (actor: AdminActor, payload: AdminProfil
          u.phone,
          u.timezone_name AS timezoneName,
          u.avatar_url AS avatarUrl,
-         sp.job_title AS jobTitle,
-         sp.city,
-         sp.state,
+         NULL AS jobTitle,
+         NULL AS city,
+         NULL AS state,
          NULL AS mfaEnabledAt,
          NULL AS defaultLandingPath,
          NULL AS dateFormat,
@@ -207,7 +207,6 @@ export const updateAdminProfile = async (actor: AdminActor, payload: AdminProfil
          NULL AS avatarColor,
          NULL AS inAppNotificationsEnabled
        FROM users u
-       LEFT JOIN staff_profiles sp ON sp.user_id = u.id
        WHERE u.id = ?
        LIMIT 1`,
       [actor.userId],
@@ -238,27 +237,6 @@ export const updateAdminProfile = async (actor: AdminActor, payload: AdminProfil
       connection
     );
 
-    const jobTitle = payload.jobTitle === undefined ? current.jobTitle || 'Admin' : normalizeOptional(payload.jobTitle) || 'Admin';
-    const city = payload.city === undefined ? current.city : normalizeOptional(payload.city);
-    const state = payload.state === undefined ? current.state : normalizeOptional(payload.state);
-
-    await executeStatement(
-      `INSERT INTO staff_profiles (
-         user_id,
-         job_title,
-         employment_status_code,
-         manager_user_id,
-         city,
-         state
-       ) VALUES (?, ?, 'active', NULL, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         job_title = VALUES(job_title),
-         city = VALUES(city),
-         state = VALUES(state)`,
-      [actor.userId, jobTitle, city, state],
-      connection
-    );
-
     await createAuditEvent(
       {
         actionCode: 'admin.profile_updated',
@@ -268,9 +246,6 @@ export const updateAdminProfile = async (actor: AdminActor, payload: AdminProfil
         changes: [
           { fieldName: 'display_name', newValue: displayName, oldValue: current.displayName },
           { fieldName: 'phone', newValue: phone, oldValue: current.phone },
-          { fieldName: 'job_title', newValue: jobTitle, oldValue: current.jobTitle },
-          { fieldName: 'city', newValue: city, oldValue: current.city },
-          { fieldName: 'state', newValue: state, oldValue: current.state },
         ],
         entityPk: actor.userId,
         entityTableName: 'users',

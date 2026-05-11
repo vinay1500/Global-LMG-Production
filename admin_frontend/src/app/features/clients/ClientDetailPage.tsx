@@ -4,10 +4,14 @@ import { WorkspaceState } from '../../components/shared/WorkspaceState';
 import { useAsyncResource } from '../../hooks/useAsyncResource';
 import { adminApi } from '../../lib/api/admin';
 import { ClientDetailAdmin } from '../../modules/ClientDetailAdmin';
+import { useAdminSession } from '../../providers/AdminSessionProvider';
 
 export const ClientDetailPage = () => {
   const navigate = useNavigate();
+  const { currentUser } = useAdminSession();
   const { clientId } = useParams();
+  const permissionCodes = currentUser?.permissionCodes || [];
+  const canCreateMatter = permissionCodes.includes('matter.update');
   const { data, errorMessage, isLoading, refresh } = useAsyncResource(
     () => adminApi.getClientWorkspace(String(clientId || '')),
     [clientId]
@@ -51,9 +55,10 @@ export const ClientDetailPage = () => {
       matters={data.matters}
       notifications={data.notifications}
       onBack={() => navigate('/clients')}
-      onCreateMatter={() => navigate(`/matters?action=new&clientId=${data.client.id}`)}
+      onCreateMatter={canCreateMatter ? () => navigate(`/matters?action=new&clientId=${data.client.id}`) : undefined}
       onViewMatter={(matter) => navigate(`/matters/${matter.id}`)}
       payments={data.payments}
+      permissionCodes={permissionCodes}
       requests={data.requests}
       summary={data.summary}
       threads={data.threads}

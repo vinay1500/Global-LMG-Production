@@ -7,7 +7,7 @@ import {
   PLATFORM_TIMEZONE_PATTERN,
 } from '../modules/settings/platformSettings.js';
 import { parsePaginationQuery } from './queryValidation.js';
-import { requireMutationPermission, requireReadPermission } from './shared.js';
+import { requireAnyReadPermission, requireMutationPermission } from './shared.js';
 
 export const eventsRouter = Router();
 
@@ -81,8 +81,8 @@ const cancelEventSchema = z.object({
 eventsRouter.get(
   '/events',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'event.view');
-    response.json(await getWorkspace(parsePaginationQuery(request.query)));
+    const actor = await requireAnyReadPermission(request, ['event.view', 'event.view_assigned']);
+    response.json(await getWorkspace(actor, parsePaginationQuery(request.query)));
   })
 );
 

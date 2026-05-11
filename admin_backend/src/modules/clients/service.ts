@@ -5,6 +5,11 @@ import { badRequest, notFound } from '../../lib/httpErrors.js';
 import { executeStatement, queryRows, withTransaction } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
 import {
+  assertCanAccessClientAccount,
+  getAssignedRecordScopeFilters,
+  hasAdminPermission,
+} from '../access/scope.js';
+import {
   fetchClientAudit,
   fetchClientsForList,
   countClientsForList,
@@ -350,11 +355,28 @@ const fetchClientNotifications = async (clientAccountId: string) => {
   }));
 };
 
-export const listClients = async (options: { limit: number; offset: number; search?: string }) => {
+export const listClients = async (
+  actor: AdminActor,
+  options: { limit: number; offset: number; search?: string }
+) => {
   const pagination = normalizePagination(options);
+  const scopeFilters = await getAssignedRecordScopeFilters(actor, {
+    assignedPermission: 'client_account.view_assigned',
+    fullPermission: 'client_account.view',
+    includeClientAccounts: true,
+    includeMatters: false,
+  });
   const [clients, total] = await Promise.all([
-    fetchClientsForList({ ...pagination, search: options.search }),
-    countClientsForList({ search: options.search }),
+    fetchClientsForList({
+      actor,
+      ...pagination,
+      clientAccountDbIds: scopeFilters.clientAccountDbIds,
+      search: options.search,
+    }),
+    countClientsForList({
+      clientAccountDbIds: scopeFilters.clientAccountDbIds,
+      search: options.search,
+    }),
   ]);
 
   return {
@@ -702,7 +724,20 @@ export const createClient = async (
   };
 };
 
-export const getClientWorkspace = async (clientAccountId: string) => {
+export const getClientWorkspace = async (actor: AdminActor, clientAccountId: string) => {
+  const hasFullClientAccess = hasAdminPermission(actor, 'client_account.view');
+  if (!hasFullClientAccess) {
+    await assertCanAccessClientAccount(actor, clientAccountId);
+  }
+
+  const scopeFilters = hasFullClientAccess
+    ? {}
+    : await getAssignedRecordScopeFilters(actor, {
+        assignedPermission: 'client_account.view_assigned',
+        fullPermission: 'client_account.view',
+        includeClientAccounts: true,
+        includeMatters: true,
+      });
   const rows = await queryRows<ClientRow>(
     `SELECT
        ca.public_id AS id,
@@ -738,18 +773,27 @@ export const getClientWorkspace = async (clientAccountId: string) => {
     throw notFound('client_not_found', 'Client account not found.');
   }
 
+  const scopedRecordFilters = {
+    clientAccountIds: [clientAccountId],
+    matterDbIds: scopeFilters.matterDbIds,
+  };
+  const canViewBilling = hasAdminPermission(actor, 'invoice.view');
+  const canViewPayments = hasAdminPermission(actor, 'payment.view');
+  const canViewNotifications = hasAdminPermission(actor, 'notification.view');
+  const canViewAudit = hasAdminPermission(actor, 'audit.view');
+
   const [requests, matters, invoices, payments, documents, events, threads, notifications] =
     await Promise.all([
-      fetchClientRequests(clientAccountId),
-      fetchMatters({ clientAccountIds: [clientAccountId] }),
-      fetchInvoices({ clientAccountIds: [clientAccountId] }),
-      fetchPayments({ clientAccountIds: [clientAccountId] }),
-      fetchDocuments({ clientAccountIds: [clientAccountId] }),
-      fetchEvents({ clientAccountIds: [clientAccountId], includeCancelled: true }),
-      fetchThreads({ clientAccountIds: [clientAccountId] }),
-      fetchClientNotifications(clientAccountId),
+      hasFullClientAccess ? fetchClientRequests(clientAccountId) : Promise.resolve([]),
+      fetchMatters({ actor, ...scopedRecordFilters }),
+      canViewBilling ? fetchInvoices({ clientAccountIds: [clientAccountId] }) : Promise.resolve([]),
+      canViewPayments ? fetchPayments({ clientAccountIds: [clientAccountId] }) : Promise.resolve([]),
+      fetchDocuments({ actor, ...scopedRecordFilters }),
+      fetchEvents({ actor, ...scopedRecordFilters, includeCancelled: true }),
+      fetchThreads({ actor, ...scopedRecordFilters }),
+      canViewNotifications ? fetchClientNotifications(clientAccountId) : Promise.resolve([]),
     ]);
-  const auditEntries = await fetchClientAudit(matters.map((matter) => matter.id));
+  const auditEntries = canViewAudit ? await fetchClientAudit(matters.map((matter) => matter.id)) : [];
   const totalBilled = invoices.reduce((sum, invoice) => sum + Number(invoice.totalAmount || 0), 0);
   const totalPaid = payments
     .filter((payment) => payment.status === 'success')

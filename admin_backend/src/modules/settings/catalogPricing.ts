@@ -7,6 +7,7 @@ import { createAuditEvent } from '../writeSupport.js';
 
 type DomainRow = RowDataPacket & {
   code: string;
+  dbId?: number;
   isActive: number;
   name: string;
   sortOrder: number;
@@ -17,8 +18,6 @@ type ServiceRow = RowDataPacket & {
   code: string;
   dbId: number;
   description: string | null;
-  domainCode: string | null;
-  domainName: string | null;
   icon: string | null;
   id: string;
   isActive: number;
@@ -111,7 +110,6 @@ export type CreateServiceInput = {
   baseFee?: number;
   code?: string;
   description?: string | null;
-  domainCode?: string | null;
   icon?: string | null;
   isActive?: boolean;
   name: string;
@@ -119,6 +117,15 @@ export type CreateServiceInput = {
 };
 
 export type UpdateServiceInput = Partial<Omit<CreateServiceInput, 'code'>>;
+
+export type CreateServiceDomainInput = {
+  code?: string;
+  isActive?: boolean;
+  name: string;
+  sortOrder?: number;
+};
+
+export type UpdateServiceDomainInput = Partial<Omit<CreateServiceDomainInput, 'code'>>;
 
 export type PricingSlabInput = {
   baseAmount: number;
@@ -229,7 +236,6 @@ const assertPositiveInteger = (value: number, fieldName: string) => {
 const normalizeServicePayload = (payload: CreateServiceInput) => {
   const name = payload.name.trim();
   const code = (payload.code?.trim() || toSlug(name)).toLowerCase();
-  const domainCode = payload.domainCode?.trim() || null;
 
   if (name.length < 2 || name.length > 180) {
     throw badRequest('invalid_service_name', 'Service name must be between 2 and 180 characters.');
@@ -244,8 +250,27 @@ const normalizeServicePayload = (payload: CreateServiceInput) => {
     code,
     baseFee: payload.baseFee ?? 1000,
     description: payload.description?.trim() || null,
-    domainCode,
     icon: payload.icon?.trim() || null,
+    isActive: payload.isActive ?? true,
+    name,
+    sortOrder: payload.sortOrder ?? 0,
+  };
+};
+
+const normalizeServiceDomainPayload = (payload: CreateServiceDomainInput) => {
+  const name = payload.name.trim();
+  const code = (payload.code?.trim() || toSlug(name)).toLowerCase();
+
+  if (name.length < 2 || name.length > 160) {
+    throw badRequest('invalid_domain_name', 'Legal domain name must be between 2 and 160 characters.');
+  }
+
+  if (!CODE_PATTERN.test(code)) {
+    throw badRequest('invalid_domain_code', 'Legal domain code must be a lowercase slug.');
+  }
+
+  return {
+    code,
     isActive: payload.isActive ?? true,
     name,
     sortOrder: payload.sortOrder ?? 0,
@@ -261,10 +286,15 @@ const mapService = (row: ServiceRow) => ({
   baseFee: Number(row.baseFee || 0),
   code: row.code,
   description: row.description || '',
-  domainCode: row.domainCode || '',
-  domainName: row.domainName || 'Unclassified',
   icon: row.icon || 'Briefcase',
   id: row.id,
+  isActive: Boolean(row.isActive),
+  name: row.name,
+  sortOrder: Number(row.sortOrder || 0),
+});
+
+const mapDomain = (row: DomainRow) => ({
+  code: row.code,
   isActive: Boolean(row.isActive),
   name: row.name,
   sortOrder: Number(row.sortOrder || 0),
@@ -356,11 +386,8 @@ const getServiceByPublicId = async (serviceId: string, executor?: QueryExecutor)
          s.base_fee_amount AS baseFee,
          s.service_icon_code AS icon,
          s.sort_order AS sortOrder,
-         s.is_active AS isActive,
-         ld.domain_code AS domainCode,
-         ld.domain_name AS domainName
+         s.is_active AS isActive
        FROM services s
-       LEFT JOIN legal_domains ld ON ld.id = s.legal_domain_id
        WHERE s.public_id = ?
        LIMIT 1`,
       [serviceId],
@@ -460,22 +487,14 @@ const loadServiceCatalog = async () => {
          s.base_fee_amount AS baseFee,
          s.service_icon_code AS icon,
          s.sort_order AS sortOrder,
-         s.is_active AS isActive,
-         ld.domain_code AS domainCode,
-         ld.domain_name AS domainName
+         s.is_active AS isActive
        FROM services s
-       LEFT JOIN legal_domains ld ON ld.id = s.legal_domain_id
        ORDER BY s.sort_order ASC, s.service_name ASC`
     ),
   ]);
 
   return {
-    domains: domainRows.map((row) => ({
-      code: row.code,
-      isActive: Boolean(row.isActive),
-      name: row.name,
-      sortOrder: Number(row.sortOrder || 0),
-    })),
+    domains: domainRows.map(mapDomain),
     services: serviceRows.map(mapService),
   };
 };
@@ -587,47 +606,178 @@ export const getPricingRules = async () => {
   return value;
 };
 
-const resolveServiceDomain = async (domainCode: string | null, executor?: QueryExecutor) => {
-  if (domainCode) {
-    const domain = firstRow(
-      await queryRows<RowDataPacket & { id: number }>(
-        `SELECT id
-         FROM legal_domains
-         WHERE domain_code = ?
-           AND is_active = 1
-         LIMIT 1`,
-        [domainCode],
-        executor
-      )
-    );
-
-    if (!domain) {
-      throw badRequest('invalid_domain', 'Select an active legal domain or leave the service unclassified.');
-    }
-
-    return domain;
-  }
-
-  const fallback = firstRow(
-    await queryRows<RowDataPacket & { id: number }>(
-      `SELECT id
+const getDomainByCode = async (domainCode: string, executor?: QueryExecutor) => {
+  const normalizedDomainCode = domainCode.trim().toLowerCase();
+  const row = firstRow(
+    await queryRows<DomainRow>(
+      `SELECT id AS dbId, domain_code AS code, domain_name AS name, sort_order AS sortOrder, is_active AS isActive
        FROM legal_domains
-       WHERE is_active = 1
-       ORDER BY
-         CASE WHEN domain_code IN ('general', 'other') THEN 0 ELSE 1 END,
-         sort_order ASC,
-         domain_name ASC
+       WHERE domain_code = ?
        LIMIT 1`,
-      [],
+      [normalizedDomainCode],
       executor
     )
   );
 
-  if (!fallback) {
-    throw badRequest('service_domain_unavailable', 'Configure at least one legal domain before creating services.');
+  if (!row) {
+    throw notFound('legal_domain_not_found', 'Legal domain not found.');
   }
 
-  return fallback;
+  return row;
+};
+
+export const createServiceDomain = async (actor: AdminActor, payload: CreateServiceDomainInput) => {
+  clearCatalogPricingCache();
+  const next = normalizeServiceDomainPayload(payload);
+
+  return withTransaction(async (connection) => {
+    const duplicate = firstRow(
+      await queryRows<RowDataPacket & { id: number }>(
+        `SELECT id
+         FROM legal_domains
+         WHERE domain_code = ?
+            OR LOWER(domain_name) = LOWER(?)
+         LIMIT 1`,
+        [next.code, next.name],
+        connection
+      )
+    );
+
+    if (duplicate) {
+      throw new AppError(409, 'legal_domain_duplicate', 'A legal domain with this code or name already exists.');
+    }
+
+    const result = await executeStatement<ResultSetHeader>(
+      `INSERT INTO legal_domains (
+         public_id,
+         domain_code,
+         domain_name,
+         sort_order,
+         is_active,
+         created_at,
+         updated_at
+       ) VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
+      [createPublicId(), next.code, next.name, next.sortOrder, next.isActive ? 1 : 0],
+      connection
+    );
+
+    await createAuditEvent(
+      {
+        actionCode: 'legal_domain.created',
+        actionLabel: 'Legal domain created',
+        actorRoleCode: actor.roleCodes[0] || 'ops_admin',
+        actorUserId: actor.userId,
+        changes: [
+          { fieldName: 'domain_code', newValue: next.code },
+          { fieldName: 'domain_name', newValue: next.name },
+          { fieldName: 'is_active', newValue: next.isActive },
+        ],
+        entityPk: result.insertId,
+        entityTableName: 'legal_domains',
+        sourceModule: 'settings_workspace',
+      },
+      connection
+    );
+
+    return mapDomain(await getDomainByCode(next.code, connection));
+  });
+};
+
+export const updateServiceDomain = async (
+  actor: AdminActor,
+  domainCode: string,
+  payload: UpdateServiceDomainInput
+) => {
+  clearCatalogPricingCache();
+  const existing = await getDomainByCode(domainCode);
+  const next = {
+    isActive: payload.isActive ?? Boolean(existing.isActive),
+    name: payload.name?.trim() || existing.name,
+    sortOrder: payload.sortOrder ?? Number(existing.sortOrder || 0),
+  };
+
+  if (next.name.length < 2 || next.name.length > 160) {
+    throw badRequest('invalid_domain_name', 'Legal domain name must be between 2 and 160 characters.');
+  }
+
+  return withTransaction(async (connection) => {
+    const duplicate = firstRow(
+      await queryRows<RowDataPacket & { id: number }>(
+        `SELECT id
+         FROM legal_domains
+         WHERE domain_code <> ?
+           AND LOWER(domain_name) = LOWER(?)
+         LIMIT 1`,
+        [existing.code, next.name],
+        connection
+      )
+    );
+
+    if (duplicate) {
+      throw new AppError(409, 'legal_domain_duplicate', 'A legal domain with this name already exists.');
+    }
+
+    await executeStatement(
+      `UPDATE legal_domains
+       SET domain_name = ?,
+           sort_order = ?,
+           is_active = ?,
+           updated_at = UTC_TIMESTAMP(6)
+       WHERE domain_code = ?`,
+      [next.name, next.sortOrder, next.isActive ? 1 : 0, existing.code],
+      connection
+    );
+
+    await createAuditEvent(
+      {
+        actionCode: 'legal_domain.updated',
+        actionLabel: 'Legal domain updated',
+        actorRoleCode: actor.roleCodes[0] || 'ops_admin',
+        actorUserId: actor.userId,
+        changes: [
+          { fieldName: 'domain_name', oldValue: existing.name, newValue: next.name },
+          { fieldName: 'sort_order', oldValue: Number(existing.sortOrder || 0), newValue: next.sortOrder },
+          { fieldName: 'is_active', oldValue: Boolean(existing.isActive), newValue: next.isActive },
+        ],
+        entityPk: existing.dbId || null,
+        entityTableName: 'legal_domains',
+        sourceModule: 'settings_workspace',
+      },
+      connection
+    );
+
+    return mapDomain(await getDomainByCode(existing.code, connection));
+  });
+};
+
+export const archiveServiceDomain = async (actor: AdminActor, domainCode: string) => {
+  clearCatalogPricingCache();
+  const existing = await getDomainByCode(domainCode);
+
+  if (!existing.isActive) {
+    return mapDomain(existing);
+  }
+
+  await executeStatement(
+    `UPDATE legal_domains
+     SET is_active = 0,
+         updated_at = UTC_TIMESTAMP(6)
+     WHERE domain_code = ?`,
+    [existing.code]
+  );
+
+  await createAuditEvent({
+    actionCode: 'legal_domain.archived',
+    actionLabel: 'Legal domain archived',
+    actorRoleCode: actor.roleCodes[0] || 'ops_admin',
+    actorUserId: actor.userId,
+    changes: [{ fieldName: 'is_active', oldValue: true, newValue: false }],
+    entityPk: existing.dbId || null,
+    entityTableName: 'legal_domains',
+    sourceModule: 'settings_workspace',
+  });
+
+  return mapDomain(await getDomainByCode(existing.code));
 };
 
 export const createService = async (actor: AdminActor, payload: CreateServiceInput) => {
@@ -635,8 +785,6 @@ export const createService = async (actor: AdminActor, payload: CreateServiceInp
   const next = normalizeServicePayload(payload);
 
   return withTransaction(async (connection) => {
-    const domain = await resolveServiceDomain(next.domainCode, connection);
-
     const duplicate = firstRow(
       await queryRows<RowDataPacket & { id: number }>(
         `SELECT id
@@ -657,7 +805,6 @@ export const createService = async (actor: AdminActor, payload: CreateServiceInp
       `INSERT INTO services (
          public_id,
          service_code,
-         legal_domain_id,
          service_name,
          service_description,
          base_fee_amount,
@@ -667,11 +814,10 @@ export const createService = async (actor: AdminActor, payload: CreateServiceInp
          is_subscription_eligible,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
       [
         createPublicId(),
         next.code,
-        domain.id,
         next.name,
         next.description,
         next.baseFee,
@@ -692,7 +838,6 @@ export const createService = async (actor: AdminActor, payload: CreateServiceInp
           { fieldName: 'service_code', newValue: next.code },
           { fieldName: 'service_name', newValue: next.name },
           { fieldName: 'base_fee_amount', newValue: next.baseFee },
-          { fieldName: 'domain_code', newValue: next.domainCode || 'internal-default' },
         ],
         entityPk: result.insertId,
         entityTableName: 'services',
@@ -727,7 +872,6 @@ export const updateService = async (
   const next = {
     description:
       payload.description === undefined ? existing.description : payload.description?.trim() || null,
-    domainCode: payload.domainCode === undefined ? existing.domainCode || null : payload.domainCode?.trim() || null,
     baseFee: payload.baseFee ?? Number(existing.baseFee || 0),
     icon: payload.icon === undefined ? existing.icon : payload.icon?.trim() || null,
     isActive: payload.isActive ?? Boolean(existing.isActive),
@@ -741,8 +885,6 @@ export const updateService = async (
   assertNonNegativeAmount(next.baseFee, 'baseFee');
 
   return withTransaction(async (connection) => {
-    const domain = await resolveServiceDomain(next.domainCode, connection);
-
     const duplicate = firstRow(
       await queryRows<RowDataPacket & { id: number }>(
         `SELECT id
@@ -761,8 +903,7 @@ export const updateService = async (
 
     await executeStatement(
       `UPDATE services
-       SET legal_domain_id = ?,
-           service_name = ?,
+       SET service_name = ?,
            service_description = ?,
            base_fee_amount = ?,
            service_icon_code = ?,
@@ -771,7 +912,6 @@ export const updateService = async (
            updated_at = UTC_TIMESTAMP(6)
        WHERE id = ?`,
       [
-        domain.id,
         next.name,
         next.description,
         next.baseFee,
@@ -792,7 +932,6 @@ export const updateService = async (
         changes: [
           { fieldName: 'service_name', oldValue: existing.name, newValue: next.name },
           { fieldName: 'base_fee_amount', oldValue: Number(existing.baseFee || 0), newValue: next.baseFee },
-          { fieldName: 'domain_code', oldValue: existing.domainCode, newValue: next.domainCode },
           { fieldName: 'is_active', oldValue: Boolean(existing.isActive), newValue: next.isActive },
         ],
         entityPk: existing.dbId,

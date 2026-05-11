@@ -447,7 +447,6 @@ export const NORMALIZED_MIGRATIONS: SchemaMigrationDefinition[] = [
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         public_id CHAR(26) NOT NULL,
         service_code VARCHAR(64) NOT NULL,
-        legal_domain_id BIGINT UNSIGNED NOT NULL,
         service_name VARCHAR(180) NOT NULL,
         service_description TEXT NULL,
         sort_order INT NOT NULL DEFAULT 0,
@@ -457,12 +456,7 @@ export const NORMALIZED_MIGRATIONS: SchemaMigrationDefinition[] = [
         updated_at DATETIME(6) NOT NULL,
         PRIMARY KEY (id),
         UNIQUE KEY uq_services_public_id (public_id),
-        UNIQUE KEY uq_services_code (service_code),
-        INDEX idx_services_domain (legal_domain_id),
-        CONSTRAINT fk_services_domain FOREIGN KEY (legal_domain_id)
-          REFERENCES legal_domains (id)
-          ON UPDATE CASCADE
-          ON DELETE RESTRICT
+        UNIQUE KEY uq_services_code (service_code)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
       `SELECT 1`,
       `CREATE TABLE IF NOT EXISTS consultation_modes (
@@ -5383,6 +5377,200 @@ export const NORMALIZED_MIGRATIONS: SchemaMigrationDefinition[] = [
       `PREPARE add_fk_cpe_service_stmt FROM @add_fk_cpe_service_sql`,
       `EXECUTE add_fk_cpe_service_stmt`,
       `DEALLOCATE PREPARE add_fk_cpe_service_stmt`,
+    ],
+  },
+  {
+    id: '057-scoped-admin-staff-roles',
+    description:
+      'Seed restricted billing, internal case staff, and advocate roles with scoped permission codes.',
+    statements: [
+      `INSERT INTO permissions (code, module_name, action_name, description, created_at, updated_at)
+       VALUES
+         ('client_account.view_assigned', 'client_account', 'view_assigned', 'View assigned client accounts', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('matter.view_assigned', 'matter', 'view_assigned', 'View assigned matters', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('matter.update_assigned', 'matter', 'update_assigned', 'Update assigned matters', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('document.view_assigned', 'document', 'view_assigned', 'View assigned matter documents', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('document.download_assigned', 'document', 'download_assigned', 'Download assigned matter documents', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('message.view', 'message', 'view', 'View message threads', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('message.view_assigned', 'message', 'view_assigned', 'View assigned matter message threads', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('message.send_assigned', 'message', 'send_assigned', 'Send messages on assigned matters', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('event.view_assigned', 'event', 'view_assigned', 'View assigned matter events', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+       ON DUPLICATE KEY UPDATE
+         module_name = VALUES(module_name),
+         action_name = VALUES(action_name),
+         description = VALUES(description),
+         updated_at = VALUES(updated_at)`,
+      `INSERT INTO roles (code, name, description, is_system, is_active, created_at, updated_at)
+       VALUES
+         ('billing_staff', 'Billing Staff', 'Restricted billing workspace staff', 1, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('case_staff', 'Case Staff', 'Assigned-matter internal case staff', 1, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)),
+         ('advocate', 'Advocate', 'Assigned-matter external advocate', 1, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
+       ON DUPLICATE KEY UPDATE
+         name = VALUES(name),
+         description = VALUES(description),
+         is_system = VALUES(is_system),
+         is_active = VALUES(is_active),
+         updated_at = VALUES(updated_at)`,
+      `INSERT INTO role_permissions (role_code, permission_code, granted_at)
+       SELECT role_code, permission_code, UTC_TIMESTAMP(6)
+       FROM (
+         SELECT 'billing_staff' AS role_code, 'invoice.view' AS permission_code
+         UNION ALL SELECT 'billing_staff', 'payment.view'
+         UNION ALL SELECT 'billing_staff', 'refund.view'
+         UNION ALL SELECT 'case_staff', 'client_account.view_assigned'
+         UNION ALL SELECT 'case_staff', 'matter.view_assigned'
+         UNION ALL SELECT 'case_staff', 'matter.update_assigned'
+         UNION ALL SELECT 'case_staff', 'document.view_assigned'
+         UNION ALL SELECT 'case_staff', 'document.download_assigned'
+         UNION ALL SELECT 'case_staff', 'message.view_assigned'
+         UNION ALL SELECT 'case_staff', 'message.send_assigned'
+         UNION ALL SELECT 'case_staff', 'event.view_assigned'
+         UNION ALL SELECT 'advocate', 'matter.view_assigned'
+         UNION ALL SELECT 'advocate', 'document.view_assigned'
+         UNION ALL SELECT 'advocate', 'document.download_assigned'
+         UNION ALL SELECT 'advocate', 'message.view_assigned'
+         UNION ALL SELECT 'advocate', 'message.send_assigned'
+         UNION ALL SELECT 'advocate', 'event.view_assigned'
+         UNION ALL SELECT 'case_manager', 'message.view'
+         UNION ALL SELECT 'ops_admin', 'message.view'
+       ) grants
+       WHERE EXISTS (SELECT 1 FROM roles WHERE code = grants.role_code)
+         AND EXISTS (SELECT 1 FROM permissions WHERE code = grants.permission_code)
+       ON DUPLICATE KEY UPDATE granted_at = VALUES(granted_at)`,
+    ],
+  },
+  {
+    id: '058-counsel-partner-login-links',
+    description:
+      'Link login-enabled advocate users to counsel partner registry entries for scoped matter access.',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS counsel_partner_users (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        public_id CHAR(26) NOT NULL,
+        counsel_partner_id BIGINT UNSIGNED NOT NULL,
+        user_id BIGINT UNSIGNED NOT NULL,
+        relationship_status_code VARCHAR(32) NOT NULL DEFAULT 'active',
+        created_by_user_id BIGINT UNSIGNED NULL,
+        created_at DATETIME(6) NOT NULL,
+        updated_at DATETIME(6) NOT NULL,
+        archived_at DATETIME(6) NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_counsel_partner_users_public_id (public_id),
+        UNIQUE KEY uq_counsel_partner_users_partner (counsel_partner_id),
+        UNIQUE KEY uq_counsel_partner_users_user (user_id),
+        INDEX idx_counsel_partner_users_status (relationship_status_code, archived_at),
+        CONSTRAINT fk_counsel_partner_users_partner FOREIGN KEY (counsel_partner_id)
+          REFERENCES counsel_partners (id)
+          ON UPDATE CASCADE
+          ON DELETE RESTRICT,
+        CONSTRAINT fk_counsel_partner_users_user FOREIGN KEY (user_id)
+          REFERENCES users (id)
+          ON UPDATE CASCADE
+          ON DELETE RESTRICT,
+        CONSTRAINT fk_counsel_partner_users_created_by FOREIGN KEY (created_by_user_id)
+          REFERENCES users (id)
+          ON UPDATE CASCADE
+          ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
+    ],
+  },
+  {
+    id: '059-matter-documents-document-index',
+    description:
+      'Add a standalone matter_documents.document_id index for assigned-document scope checks.',
+    statements: [
+      `SET @has_idx_matter_documents_document := (
+         SELECT COUNT(*)
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE()
+           AND table_name = 'matter_documents'
+           AND index_name = 'idx_matter_documents_document'
+       )`,
+      `SET @add_idx_matter_documents_document_sql := IF(
+         @has_idx_matter_documents_document = 0,
+         'ALTER TABLE matter_documents ADD INDEX idx_matter_documents_document (document_id)',
+         'DO 0'
+       )`,
+      `PREPARE add_idx_matter_documents_document_stmt FROM @add_idx_matter_documents_document_sql`,
+      `EXECUTE add_idx_matter_documents_document_stmt`,
+      `DEALLOCATE PREPARE add_idx_matter_documents_document_stmt`,
+    ],
+  },
+  {
+    id: '060-password-reset-token-sent-at-nullability',
+    description:
+      'Allow password reset/setup tokens to exist before a real setup email is sent.',
+    statements: [
+      `SET @needs_password_reset_sent_at_nullable := (
+         SELECT COUNT(*)
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = 'password_reset_tokens'
+           AND column_name = 'sent_at'
+           AND is_nullable = 'NO'
+       )`,
+      `SET @alter_password_reset_sent_at_nullable_sql := IF(
+         @needs_password_reset_sent_at_nullable > 0,
+         'ALTER TABLE password_reset_tokens MODIFY COLUMN sent_at DATETIME(6) NULL',
+         'DO 0'
+       )`,
+      `PREPARE alter_password_reset_sent_at_nullable_stmt FROM @alter_password_reset_sent_at_nullable_sql`,
+      `EXECUTE alter_password_reset_sent_at_nullable_stmt`,
+      `DEALLOCATE PREPARE alter_password_reset_sent_at_nullable_stmt`,
+    ],
+  },
+  {
+    id: '061-decouple-services-from-legal-domains',
+    description:
+      'Remove the legacy required legal domain relationship from primary services.',
+    statements: [
+      `SET @has_fk_services_domain := (
+         SELECT COUNT(*)
+         FROM information_schema.referential_constraints
+         WHERE constraint_schema = DATABASE()
+           AND table_name = 'services'
+           AND constraint_name = 'fk_services_domain'
+       )`,
+      `SET @drop_fk_services_domain_sql := IF(
+         @has_fk_services_domain > 0,
+         'ALTER TABLE services DROP FOREIGN KEY fk_services_domain',
+         'DO 0'
+       )`,
+      `PREPARE drop_fk_services_domain_stmt FROM @drop_fk_services_domain_sql`,
+      `EXECUTE drop_fk_services_domain_stmt`,
+      `DEALLOCATE PREPARE drop_fk_services_domain_stmt`,
+
+      `SET @has_idx_services_domain := (
+         SELECT COUNT(*)
+         FROM information_schema.statistics
+         WHERE table_schema = DATABASE()
+           AND table_name = 'services'
+           AND index_name = 'idx_services_domain'
+       )`,
+      `SET @drop_idx_services_domain_sql := IF(
+         @has_idx_services_domain > 0,
+         'ALTER TABLE services DROP INDEX idx_services_domain',
+         'DO 0'
+       )`,
+      `PREPARE drop_idx_services_domain_stmt FROM @drop_idx_services_domain_sql`,
+      `EXECUTE drop_idx_services_domain_stmt`,
+      `DEALLOCATE PREPARE drop_idx_services_domain_stmt`,
+
+      `SET @has_services_legal_domain_id := (
+         SELECT COUNT(*)
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = 'services'
+           AND column_name = 'legal_domain_id'
+       )`,
+      `SET @drop_services_legal_domain_id_sql := IF(
+         @has_services_legal_domain_id > 0,
+         'ALTER TABLE services DROP COLUMN legal_domain_id',
+         'DO 0'
+       )`,
+      `PREPARE drop_services_legal_domain_id_stmt FROM @drop_services_legal_domain_id_sql`,
+      `EXECUTE drop_services_legal_domain_id_stmt`,
+      `DEALLOCATE PREPARE drop_services_legal_domain_id_stmt`,
     ],
   },
 ];

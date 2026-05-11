@@ -56,6 +56,10 @@ export const SettingsPage = () => {
         await adminApi.archiveServiceCatalogService(serviceId);
         await refresh();
       }}
+      onArchiveServiceDomain={async (domainCode) => {
+        await adminApi.archiveServiceCatalogDomain(domainCode);
+        await refresh();
+      }}
       onArchiveUrgencyRule={async (ruleId) => {
         await adminApi.archiveUrgencyRule(ruleId);
         await refresh();
@@ -92,6 +96,11 @@ export const SettingsPage = () => {
         await adminApi.createRbacRole(payload);
         await refresh();
       }}
+      onCreateAdminUser={async (payload) => {
+        const result = await adminApi.createAdminUser(payload);
+        await refresh();
+        return result;
+      }}
       onCreatePricingSlab={async (payload) => {
         await adminApi.createPricingSlab(payload);
         await refresh();
@@ -112,6 +121,10 @@ export const SettingsPage = () => {
         await adminApi.createServiceCatalogService(payload);
         await refresh();
       }}
+      onCreateServiceDomain={async (payload) => {
+        await adminApi.createServiceCatalogDomain(payload);
+        await refresh();
+      }}
       onCreateUrgencyRule={async (payload) => {
         await adminApi.createUrgencyRule(payload);
         await refresh();
@@ -127,6 +140,16 @@ export const SettingsPage = () => {
       onCreateTeamMember={async (payload) => {
         await adminApi.createTeamMember(payload);
         await refresh();
+      }}
+      onEnableTeamMemberLogin={async (memberId, payload) => {
+        const result = await adminApi.enableTeamMemberLogin(memberId, payload);
+        await refresh();
+        return result;
+      }}
+      onUpdateTeamMemberLogin={async (memberId, payload) => {
+        const result = await adminApi.updateTeamMemberLogin(memberId, payload);
+        await refresh();
+        return result;
       }}
       onSetDefaultTemplate={async (templateId) => {
         await adminApi.setDefaultTemplate(templateId);
@@ -176,6 +199,10 @@ export const SettingsPage = () => {
         await adminApi.updateServiceCatalogService(serviceId, payload);
         await refresh();
       }}
+      onUpdateServiceDomain={async (domainCode, payload) => {
+        await adminApi.updateServiceCatalogDomain(domainCode, payload);
+        await refresh();
+      }}
       onUpdateUrgencyRule={async (ruleId, payload) => {
         await adminApi.updateUrgencyRule(ruleId, payload);
         await refresh();
@@ -195,6 +222,11 @@ export const SettingsPage = () => {
       onUpdateInvoiceSettings={async (payload) => {
         await adminApi.updateInvoiceSettings(payload);
         await refresh();
+      }}
+      onUpdateAdminUser={async (userId, payload) => {
+        const result = await adminApi.updateAdminUser(userId, payload);
+        await refresh();
+        return result;
       }}
       onUpdatePlatformSetting={async (key, payload) => {
         await adminApi.updatePlatformSetting(key, payload);

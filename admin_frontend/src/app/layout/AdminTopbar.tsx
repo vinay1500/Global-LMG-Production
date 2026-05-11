@@ -23,6 +23,12 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { AdminSessionUser } from '../lib/api/contracts';
+import {
+  DOCUMENT_ROUTE_PERMISSIONS,
+  EVENT_ROUTE_PERMISSIONS,
+  MESSAGE_ROUTE_PERMISSIONS,
+  SETTINGS_ROUTE_PERMISSIONS,
+} from '../config/navigation';
 
 type AdminTopbarProps = {
   currentUser: AdminSessionUser | null;
@@ -46,6 +52,8 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({
   const [accountOpen, setAccountOpen] = useState(false);
   const initials = currentUser?.displayName?.slice(0, 1)?.toUpperCase() || 'A';
   const hasPermission = (permission: string) => Boolean(currentUser?.permissionCodes.includes(permission));
+  const hasAnyPermission = (permissions: string[]) =>
+    permissions.some((permission) => currentUser?.permissionCodes.includes(permission));
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -137,7 +145,7 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({
               className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-[#E6E4DD] bg-white p-2 shadow-xl"
               role="menu"
             >
-              {hasPermission('message.send') ? (
+              {hasAnyPermission(MESSAGE_ROUTE_PERMISSIONS) ? (
                 <MenuAction
                   description="Start or reply from Communications Desk"
                   icon={MessageSquare}
@@ -145,7 +153,7 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({
                   onClick={() => navigateAndClose('/messages')}
                 />
               ) : null}
-              {hasPermission('event.view') ? (
+              {hasAnyPermission(EVENT_ROUTE_PERMISSIONS) ? (
                 <MenuAction
                   description="Create or manage scheduled meetings"
                   icon={Calendar}
@@ -153,7 +161,7 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({
                   onClick={() => navigateAndClose('/meetings')}
                 />
               ) : null}
-              {hasPermission('document.view') ? (
+              {hasAnyPermission(DOCUMENT_ROUTE_PERMISSIONS) ? (
                 <MenuAction
                   description="Upload and review client documents"
                   icon={FileUp}
@@ -201,7 +209,7 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({
         <button
           aria-label="Open notifications"
           className="p-2 text-[#8C8981] hover:text-[#2C2B29] hover:bg-[#E6E4DD] rounded-full transition relative disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!hasPermission('matter.view')}
+          disabled={!hasPermission('notification.view')}
           onClick={() => navigateAndClose('/notifications')}
           type="button"
         >
@@ -241,18 +249,22 @@ export const AdminTopbar: React.FC<AdminTopbarProps> = ({
                 <p className="text-xs text-[#8C8981]">{currentUser?.email || 'Session bootstrap pending'}</p>
               </div>
               <div className="my-2 border-t border-[#F4F1EA]" />
-              <MenuAction
-                description="Platform settings workspace"
-                icon={Settings}
-                label="Settings"
-                onClick={() => navigateAndClose('/settings')}
-              />
-              <MenuAction
-                description="Notification center"
-                icon={Bell}
-                label="Notifications"
-                onClick={() => navigateAndClose('/notifications')}
-              />
+              {hasAnyPermission(SETTINGS_ROUTE_PERMISSIONS) ? (
+                <MenuAction
+                  description="Platform settings workspace"
+                  icon={Settings}
+                  label="Settings"
+                  onClick={() => navigateAndClose('/settings')}
+                />
+              ) : null}
+              {hasPermission('notification.view') ? (
+                <MenuAction
+                  description="Notification center"
+                  icon={Bell}
+                  label="Notifications"
+                  onClick={() => navigateAndClose('/notifications')}
+                />
+              ) : null}
               <MenuAction
                 description="Update your admin display details"
                 icon={UserCircle}

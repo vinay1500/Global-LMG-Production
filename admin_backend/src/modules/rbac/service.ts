@@ -3,6 +3,7 @@ import { badRequest, forbidden, notFound } from '../../lib/httpErrors.js';
 import { executeStatement, queryRows, withTransaction, type QueryExecutor } from '../../lib/mysql.js';
 import type { AdminActor } from '../auth/service.js';
 import { createAuditEvent } from '../writeSupport.js';
+import { assertCanAssignRoleCode, canAssignRoleCode } from './protectedRoles.js';
 
 type RoleRow = RowDataPacket & {
   code: string;
@@ -22,8 +23,14 @@ type PermissionRow = RowDataPacket & {
 };
 
 type UserRoleRow = RowDataPacket & {
+  actorTypeCode: string;
+  credentialsCreated: number;
   displayName: string;
   email: string;
+  lastLoginAt: string | null;
+  loginEnabled: number;
+  mfaEnabledAt: string | null;
+  mustRotatePassword: number | null;
   permissionCode: string | null;
   publicId: string;
   roleCode: string | null;
@@ -63,6 +70,15 @@ type RoleUpdatePayload = {
 
 const CRITICAL_PERMISSIONS = ['dashboard.view', 'settings.manage', 'rbac.manage'];
 const SYSTEM_ROLE_CODES = new Set(['ops_admin', 'client']);
+const STAFF_PROFILE_REQUIRED_ROLE_CODES = new Set(['case_staff', 'field_staff', 'internal_staff']);
+const ADMIN_USERS_EXCLUDED_ROLE_CODES = [
+  'advocate',
+  'billing_admin',
+  'billing_staff',
+  'case_staff',
+  'field_staff',
+  'internal_staff',
+];
 
 const normalizeRoleCode = (value: string) =>
   value
@@ -103,13 +119,101 @@ const getUser = async (userPublicId: string, executor?: QueryExecutor) => {
      FROM users
      WHERE public_id = ?
        AND archived_at IS NULL
-       AND login_enabled = 1
      LIMIT 1`,
     [userPublicId],
     executor
   );
 
   return rows[0] || null;
+};
+
+const assertOperationalProfileForRole = async (
+  user: UserDetailRow,
+  roleCode: string,
+  executor: QueryExecutor
+) => {
+  if (STAFF_PROFILE_REQUIRED_ROLE_CODES.has(roleCode)) {
+    const rows = await queryRows<RowDataPacket & { ok: number }>(
+      `SELECT 1 AS ok
+       FROM staff_profiles sp
+       INNER JOIN users u
+         ON u.id = sp.user_id
+        AND u.archived_at IS NULL
+        AND u.actor_type_code <> 'client'
+       WHERE sp.user_id = ?
+         AND sp.employment_status_code = 'active'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM user_roles existing_ur
+           WHERE existing_ur.user_id = u.id
+             AND existing_ur.is_active = 1
+             AND (existing_ur.starts_at IS NULL OR existing_ur.starts_at <= UTC_TIMESTAMP(6))
+             AND (existing_ur.ends_at IS NULL OR existing_ur.ends_at >= UTC_TIMESTAMP(6))
+             AND existing_ur.role_code NOT IN ('case_staff', 'field_staff', 'internal_staff')
+         )
+         AND (
+           (
+             u.actor_type_code = 'admin'
+             AND u.login_enabled = 0
+             AND NOT EXISTS (
+               SELECT 1
+               FROM user_roles prelogin_ur
+               WHERE prelogin_ur.user_id = u.id
+                 AND prelogin_ur.is_active = 1
+                 AND (prelogin_ur.starts_at IS NULL OR prelogin_ur.starts_at <= UTC_TIMESTAMP(6))
+                 AND (prelogin_ur.ends_at IS NULL OR prelogin_ur.ends_at >= UTC_TIMESTAMP(6))
+             )
+           )
+           OR (
+             u.actor_type_code = 'staff'
+             AND EXISTS (
+               SELECT 1
+               FROM user_roles staff_ur
+               WHERE staff_ur.user_id = u.id
+                 AND staff_ur.is_active = 1
+                 AND (staff_ur.starts_at IS NULL OR staff_ur.starts_at <= UTC_TIMESTAMP(6))
+                 AND (staff_ur.ends_at IS NULL OR staff_ur.ends_at >= UTC_TIMESTAMP(6))
+                 AND staff_ur.role_code IN ('case_staff', 'field_staff', 'internal_staff')
+             )
+           )
+         )
+       LIMIT 1`,
+      [user.id],
+      executor
+    );
+
+    if (!rows[0]) {
+      throw badRequest(
+        'staff_profile_required_for_role',
+        'Create this staff member in Team & Counsel first, then enable login.'
+      );
+    }
+  }
+
+  if (roleCode === 'advocate') {
+    const rows = await queryRows<RowDataPacket & { ok: number }>(
+      `SELECT 1 AS ok
+       FROM counsel_partner_users cpu
+       INNER JOIN counsel_partners cp
+        ON cp.id = cpu.counsel_partner_id
+        AND cp.archived_at IS NULL
+        AND cp.partner_status_code = 'active'
+        AND COALESCE(cp.partner_type_code, 'external_counsel') = 'external_counsel'
+       WHERE cpu.user_id = ?
+         AND cpu.relationship_status_code = 'active'
+         AND cpu.archived_at IS NULL
+       LIMIT 1`,
+      [user.id],
+      executor
+    );
+
+    if (!rows[0]) {
+      throw badRequest(
+        'advocate_profile_required_for_role',
+        'Create this external counsel in Team & Counsel first, then enable login.'
+      );
+    }
+  }
 };
 
 const getPermissionCodes = async (executor?: QueryExecutor) => {
@@ -149,7 +253,8 @@ const activeOpsAdminCount = async (executor?: QueryExecutor) => {
        ON r.code = ur.role_code
       AND r.is_active = 1
      WHERE u.archived_at IS NULL
-       AND u.login_enabled = 1`,
+       AND u.login_enabled = 1
+       AND u.account_status_code = 'active'`,
     [],
     executor
   );
@@ -310,11 +415,19 @@ export const getWorkspace = async () => {
     queryRows<UserRoleRow>(
       `SELECT
          u.public_id AS publicId,
+         u.actor_type_code AS actorTypeCode,
          u.display_name AS displayName,
          u.email,
+         u.last_login_at AS lastLoginAt,
+         u.login_enabled AS loginEnabled,
+         CASE WHEN uc.user_id IS NULL THEN 0 ELSE 1 END AS credentialsCreated,
+         uc.must_rotate_password AS mustRotatePassword,
+         ams.enabled_at AS mfaEnabledAt,
          r.code AS roleCode,
          rp.permission_code AS permissionCode
        FROM users u
+       LEFT JOIN user_credentials uc ON uc.user_id = u.id
+       LEFT JOIN admin_mfa_secrets ams ON ams.user_id = u.id AND ams.enabled_at IS NOT NULL
        LEFT JOIN user_roles ur
          ON ur.user_id = u.id
         AND ur.is_active = 1
@@ -325,20 +438,19 @@ export const getWorkspace = async () => {
         AND r.is_active = 1
        LEFT JOIN role_permissions rp ON rp.role_code = r.code
        WHERE u.archived_at IS NULL
-         AND u.login_enabled = 1
-         AND (
-           u.actor_type_code <> 'client'
-           OR EXISTS (
-             SELECT 1
-             FROM user_roles staff_role
-             WHERE staff_role.user_id = u.id
-               AND staff_role.role_code <> 'client'
-               AND staff_role.is_active = 1
-               AND (staff_role.starts_at IS NULL OR staff_role.starts_at <= UTC_TIMESTAMP(6))
-               AND (staff_role.ends_at IS NULL OR staff_role.ends_at >= UTC_TIMESTAMP(6))
-           )
+         AND u.actor_type_code <> 'client'
+         AND EXISTS (
+           SELECT 1
+           FROM user_roles admin_role
+           WHERE admin_role.user_id = u.id
+             AND admin_role.role_code <> 'client'
+             AND admin_role.role_code NOT IN (?, ?, ?, ?, ?, ?)
+             AND admin_role.is_active = 1
+             AND (admin_role.starts_at IS NULL OR admin_role.starts_at <= UTC_TIMESTAMP(6))
+             AND (admin_role.ends_at IS NULL OR admin_role.ends_at >= UTC_TIMESTAMP(6))
          )
-       ORDER BY u.display_name ASC`
+       ORDER BY u.display_name ASC`,
+      ADMIN_USERS_EXCLUDED_ROLE_CODES
     ),
   ]);
 
@@ -378,9 +490,15 @@ export const getWorkspace = async () => {
   const usersById = new Map<
     string,
     {
+      actorTypeCode: string;
+      credentialsCreated: boolean;
       displayName: string;
       email: string;
       id: string;
+      lastLoginAt: string | null;
+      loginEnabled: boolean;
+      mfaEnabled: boolean;
+      mustRotatePassword: boolean;
       permissionCodes: string[];
       roleCodes: string[];
     }
@@ -390,9 +508,15 @@ export const getWorkspace = async () => {
     const current =
       usersById.get(row.publicId) ||
       {
+        actorTypeCode: row.actorTypeCode,
+        credentialsCreated: Boolean(row.credentialsCreated),
         displayName: row.displayName,
         email: row.email,
         id: row.publicId,
+        lastLoginAt: row.lastLoginAt,
+        loginEnabled: Boolean(row.loginEnabled),
+        mfaEnabled: Boolean(row.mfaEnabledAt),
+        mustRotatePassword: Boolean(row.mustRotatePassword),
         permissionCodes: [],
         roleCodes: [],
       };
@@ -645,6 +769,19 @@ export const assignUserRole = async (actor: AdminActor, userPublicId: string, ro
     if (user.actorTypeCode === 'client') {
       throw forbidden('client_role_assignment_blocked', 'Client portal users cannot receive admin roles here.');
     }
+    if (!canAssignRoleCode(actor, role.code)) {
+      await auditRbacChange(actor, {
+        actionCode: 'user_role.protected_assignment_denied',
+        actionLabel: 'Protected user role assignment denied',
+        summaryNewValue: {
+          roleCode: role.code,
+          userEmail: user.email,
+          userId: user.publicId,
+        },
+      });
+      assertCanAssignRoleCode(actor, role.code);
+    }
+    await assertOperationalProfileForRole(user, role.code, connection);
 
     const activeRows = await queryRows<RowDataPacket & { id: number }>(
       `SELECT id
@@ -677,7 +814,8 @@ export const assignUserRole = async (actor: AdminActor, userPublicId: string, ro
            SET granted_by_user_id = ?,
                starts_at = NULL,
                ends_at = NULL,
-               is_active = 1
+               is_active = 1,
+               updated_at = UTC_TIMESTAMP(6)
            WHERE id = ?`,
           [actor.userId, existingRows[0].id],
           connection
@@ -691,8 +829,9 @@ export const assignUserRole = async (actor: AdminActor, userPublicId: string, ro
              starts_at,
              ends_at,
              is_active,
-             granted_at
-           ) VALUES (?, ?, ?, NULL, NULL, 1, UTC_TIMESTAMP(6))`,
+             created_at,
+             updated_at
+           ) VALUES (?, ?, ?, NULL, NULL, 1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
           [user.id, role.code, actor.userId],
           connection
         );

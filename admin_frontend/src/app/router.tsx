@@ -5,6 +5,14 @@ import { LoginPage } from './features/auth/LoginPage';
 import { PasswordRotationPage } from './features/auth/PasswordRotationPage';
 import { NotFoundPage } from './features/system/NotFoundPage';
 import { AdminLayout } from './layout/AdminLayout';
+import {
+  CLIENT_ROUTE_PERMISSIONS,
+  DOCUMENT_ROUTE_PERMISSIONS,
+  EVENT_ROUTE_PERMISSIONS,
+  MATTER_ROUTE_PERMISSIONS,
+  MESSAGE_ROUTE_PERMISSIONS,
+  SETTINGS_ROUTE_PERMISSIONS,
+} from './config/navigation';
 import { RequireAdminAuth } from './routes/RequireAdminAuth';
 import { RequirePermission } from './routes/RequirePermission';
 
@@ -77,27 +85,35 @@ export const AdminRoutes = () => {
             <Route element={<RequirePermission permission="dashboard.view" />}>
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
               <Route path="/tasks" element={<TasksPage />} />
             </Route>
-            <Route element={<RequirePermission permission="client_account.view" />}>
+            <Route element={<RequirePermission anyOf={SETTINGS_ROUTE_PERMISSIONS} />}>
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
+            <Route element={<RequirePermission anyOf={CLIENT_ROUTE_PERMISSIONS} />}>
               <Route path="/clients" element={<ClientsPage />} />
               <Route path="/clients/:clientId" element={<ClientDetailPage />} />
             </Route>
-            <Route element={<RequirePermission permission="matter.view" />}>
+            <Route element={<RequirePermission anyOf={MATTER_ROUTE_PERMISSIONS} />}>
               <Route path="/matters" element={<MattersPage />} />
               <Route path="/matters/:matterId" element={<MatterDetailPage />} />
+            </Route>
+            <Route element={<RequirePermission permission="matter.view" />}>
               <Route path="/requests" element={<RequestsPage />} />
+            </Route>
+            <Route element={<RequirePermission permission="notification.view" />}>
               <Route path="/notifications" element={<NotificationsPage />} />
+            </Route>
+            <Route element={<RequirePermission permission="audit.view" />}>
               <Route path="/audit" element={<AuditPage />} />
             </Route>
-            <Route element={<RequirePermission permission="message.send" />}>
+            <Route element={<RequirePermission anyOf={MESSAGE_ROUTE_PERMISSIONS} />}>
               <Route path="/messages" element={<MessagesPage />} />
             </Route>
-            <Route element={<RequirePermission permission="document.view" />}>
+            <Route element={<RequirePermission anyOf={DOCUMENT_ROUTE_PERMISSIONS} />}>
               <Route path="/documents" element={<DocumentsPage />} />
             </Route>
-            <Route element={<RequirePermission permission="event.view" />}>
+            <Route element={<RequirePermission anyOf={EVENT_ROUTE_PERMISSIONS} />}>
               <Route path="/meetings" element={<MeetingsPage />} />
             </Route>
             <Route element={<RequirePermission permission="invoice.view" />}>

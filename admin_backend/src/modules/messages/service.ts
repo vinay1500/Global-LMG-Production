@@ -1,4 +1,10 @@
 import type { AdminActor } from '../auth/service.js';
+import {
+  assertCanAccessMatter,
+  assertCanAccessMessageThread,
+  getAssignedRecordScopeFilters,
+  hasAdminPermission,
+} from '../access/scope.js';
 import { createPublicId } from '../../lib/authCrypto.js';
 import { allocateBusinessNumber } from '../../lib/businessSequences.js';
 import { badRequest, notFound } from '../../lib/httpErrors.js';
@@ -58,15 +64,27 @@ type ExistingGeneralThreadRow = RowDataPacket & {
 export const getWorkspace = async (actor: AdminActor, options: { limit?: number; offset?: number } = {}) => {
   const startedAt = process.hrtime.bigint();
   const pagination = normalizePagination(options);
+  const scopeFilters = await getAssignedRecordScopeFilters(actor, {
+    assignedPermission: 'message.view_assigned',
+    fullPermission: 'message.view',
+    includeClientAccounts: true,
+    includeMatters: true,
+  });
   const threads = await fetchThreads({
+    actor,
     limit: pagination.limit,
+    matterDbIds: scopeFilters.matterDbIds,
     offset: pagination.offset,
     viewerUserId: actor.userId,
   });
   if (threads.length === 0) {
-    const clients = await fetchClientOptions({ limit: 250, offset: 0 });
-    const matters = await fetchMatterOptions({ limit: 250 });
-    const total = await countThreads({});
+    const clients = await fetchClientOptions({
+      clientAccountDbIds: scopeFilters.clientAccountDbIds,
+      limit: 250,
+      offset: 0,
+    });
+    const matters = await fetchMatterOptions({ actor, limit: 250, matterDbIds: scopeFilters.matterDbIds });
+    const total = await countThreads({ actor, matterDbIds: scopeFilters.matterDbIds });
     if (env.APP_ENV !== 'production') {
       const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
       logEvent('info', 'admin.messages_workspace.loaded', {
@@ -90,12 +108,22 @@ export const getWorkspace = async (actor: AdminActor, options: { limit?: number;
   }
 
   const clientIds = Array.from(new Set(threads.map((thread) => thread.clientId).filter(Boolean)));
-  const clients = await fetchClientOptions({ limit: 250, offset: 0 });
-  const allMatters = await fetchMatterOptions({ limit: 250 });
-  const invoices = await fetchInvoiceSummaries({ clientAccountIds: clientIds, limit: 100 });
-  const events = await fetchEvents({ clientAccountIds: clientIds });
-  const messages = await fetchMessagesByThreadIds(threads.map((thread) => thread.id));
-  const total = await countThreads({});
+  const clients = await fetchClientOptions({
+    clientAccountDbIds: scopeFilters.clientAccountDbIds,
+    limit: 250,
+    offset: 0,
+  });
+  const allMatters = await fetchMatterOptions({ actor, limit: 250, matterDbIds: scopeFilters.matterDbIds });
+  const invoices = hasAdminPermission(actor, 'invoice.view')
+    ? await fetchInvoiceSummaries({ clientAccountIds: clientIds, limit: 100 })
+    : [];
+  const events = await fetchEvents({
+    actor,
+    clientAccountIds: scopeFilters.matterDbIds === undefined ? clientIds : undefined,
+    matterDbIds: scopeFilters.matterDbIds,
+  });
+  const messages = await fetchMessagesByThreadIds(threads.map((thread) => thread.id), actor);
+  const total = await countThreads({ actor, matterDbIds: scopeFilters.matterDbIds });
   const response = {
     clients,
     events,
@@ -135,6 +163,16 @@ export const createThread = async (
   const messageContent = sanitizeMessageContent(payload.content);
   if (!messageContent) {
     throw badRequest('message_content_required', 'Message content is required.');
+  }
+
+  if (!hasAdminPermission(actor, 'message.send')) {
+    if (!payload.matterId) {
+      throw badRequest(
+        'assigned_message_matter_required',
+        'Select an assigned matter before sending a message.'
+      );
+    }
+    await assertCanAccessMatter(actor, payload.matterId);
   }
 
   return withTransaction(async (connection) => {
@@ -399,6 +437,10 @@ export const replyToThread = async (
   }
 
   return withTransaction(async (connection) => {
+    if (!hasAdminPermission(actor, 'message.send')) {
+      await assertCanAccessMessageThread(actor, payload.threadId, connection);
+    }
+
     const thread = await resolveThreadByPublicId(payload.threadId, connection);
     const stateRows = await queryRows<ThreadStateRow>(
       `SELECT
@@ -511,6 +553,10 @@ export const replyToThread = async (
 
 export const markThreadRead = async (actor: AdminActor, threadPublicId: string) => {
   return withTransaction(async (connection) => {
+    if (!hasAdminPermission(actor, 'message.view')) {
+      await assertCanAccessMessageThread(actor, threadPublicId, connection);
+    }
+
     const thread = await resolveThreadByPublicId(threadPublicId, connection);
 
     await executeStatement(

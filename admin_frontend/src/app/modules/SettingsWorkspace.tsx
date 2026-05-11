@@ -1,12 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, FileStack, FileText, Layers, Loader2, Save, Shield, SlidersHorizontal, Users } from 'lucide-react';
-import { formatCurrency } from '../data/formatters';
+import { formatCurrency, formatDateTime } from '../data/formatters';
 import type {
+  CreateAdminUserPayload,
+  CreateAdminUserResponse,
   CreateRbacRolePayload,
+  CreateServiceDomainPayload,
   CreateServiceCatalogPayload,
   ConsultationModePayload,
   CountryPricingPayload,
   DocumentTypePayload,
+  EnableTeamMemberLoginPayload,
+  EnableTeamMemberLoginResponse,
   NotificationDeliverySettingPayload,
   ReminderSettingPayload,
   PlatformSetting,
@@ -25,19 +30,26 @@ import type {
   UpdateConsultationModePayload,
   UpdateCountryPricingPayload,
   UpdateInvoiceSettingsPayload,
+  UpdateAdminUserPayload,
+  UpdateAdminUserResponse,
   UpdateReminderSettingPayload,
   UpdatePlatformSettingPayload,
   UpdatePriceOverridePayload,
   UpdateRbacRolePayload,
   UpdateRbacRolePermissionsPayload,
+  UpdateServiceDomainPayload,
   UpdateServiceCatalogPayload,
+  UpdateTeamMemberLoginPayload,
+  UpdateTeamMemberLoginResponse,
   UpdateTeamMemberPayload,
   UpdateTemplatePayload,
   UpdateUrgencyRulePayload,
   UrgencyRulePayload,
 } from '../lib/api/contracts';
+import { useAdminSession } from '../providers/AdminSessionProvider';
 
 type SettingsTab =
+  | 'adminUsers'
   | 'documents'
   | 'general'
   | 'invoice'
@@ -48,6 +60,8 @@ type SettingsTab =
   | 'team'
   | 'templates';
 
+type RbacWorkspaceTab = 'advanced' | 'overview' | 'roles';
+
 type SettingsWorkspaceProps = {
   onArchiveDocumentType?: (documentTypeId: string) => Promise<void>;
   onArchiveInvoicePdfTemplate?: (templateId: string) => Promise<void>;
@@ -57,6 +71,7 @@ type SettingsWorkspaceProps = {
   onArchivePriceOverride?: (overrideId: string) => Promise<void>;
   onArchiveReminderSetting?: (settingId: string) => Promise<void>;
   onArchiveService?: (serviceId: string) => Promise<void>;
+  onArchiveServiceDomain?: (domainCode: string) => Promise<void>;
   onArchiveTemplate?: (templateId: string) => Promise<void>;
   onArchiveTeamMember?: (memberId: string) => Promise<void>;
   onArchiveUrgencyRule?: (ruleId: string) => Promise<void>;
@@ -67,11 +82,17 @@ type SettingsWorkspaceProps = {
   onCreateCountryPricing?: (payload: CountryPricingPayload) => Promise<void>;
   onCreatePriceOverride?: (payload: PriceOverridePayload) => Promise<void>;
   onCreateRbacRole?: (payload: CreateRbacRolePayload) => Promise<void>;
+  onCreateAdminUser?: (payload: CreateAdminUserPayload) => Promise<CreateAdminUserResponse>;
   onCreateReminderSetting?: (payload: ReminderSettingPayload) => Promise<void>;
   onCreateService?: (payload: CreateServiceCatalogPayload) => Promise<void>;
+  onCreateServiceDomain?: (payload: CreateServiceDomainPayload) => Promise<void>;
   onCreateTemplate?: (payload: TemplatePayload) => Promise<void>;
   onCreateTeamMember?: (payload: TeamMemberPayload) => Promise<void>;
   onCreateUrgencyRule?: (payload: UrgencyRulePayload) => Promise<void>;
+  onEnableTeamMemberLogin?: (
+    memberId: string,
+    payload: EnableTeamMemberLoginPayload
+  ) => Promise<EnableTeamMemberLoginResponse>;
   onSetDefaultTemplate?: (templateId: string) => Promise<void>;
   onArchiveRbacRole?: (roleId: string) => Promise<void>;
   onAssignRbacUserRole?: (userId: string, roleCode: string) => Promise<void>;
@@ -88,10 +109,16 @@ type SettingsWorkspaceProps = {
   onUpdatePriceOverride?: (overrideId: string, payload: UpdatePriceOverridePayload) => Promise<void>;
   onUpdateReminderSetting?: (settingId: string, payload: UpdateReminderSettingPayload) => Promise<void>;
   onUpdateService?: (serviceId: string, payload: UpdateServiceCatalogPayload) => Promise<void>;
+  onUpdateServiceDomain?: (domainCode: string, payload: UpdateServiceDomainPayload) => Promise<void>;
   onUpdateTeamMember?: (memberId: string, payload: UpdateTeamMemberPayload) => Promise<void>;
+  onUpdateTeamMemberLogin?: (
+    memberId: string,
+    payload: UpdateTeamMemberLoginPayload
+  ) => Promise<UpdateTeamMemberLoginResponse>;
   onUpdateTemplate?: (templateId: string, payload: UpdateTemplatePayload) => Promise<void>;
   onUpdateUrgencyRule?: (ruleId: string, payload: UpdateUrgencyRulePayload) => Promise<void>;
   onUpdateInvoiceSettings?: (payload: UpdateInvoiceSettingsPayload) => Promise<void>;
+  onUpdateAdminUser?: (userId: string, payload: UpdateAdminUserPayload) => Promise<UpdateAdminUserResponse>;
   onUpdatePlatformSetting?: (key: string, payload: UpdatePlatformSettingPayload) => Promise<void>;
   onUpdateRbacRole?: (roleId: string, payload: UpdateRbacRolePayload) => Promise<void>;
   onUpdateRbacRolePermissions?: (
@@ -106,6 +133,7 @@ const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const ACTIVE_TAB_ORDER: Array<{ id: SettingsTab; label: string }> = [
   { id: 'general', label: 'General Platform' },
   { id: 'team', label: 'Team & Counsel' },
+  { id: 'adminUsers', label: 'Admin Users' },
   { id: 'services', label: 'Service Catalog' },
   { id: 'pricing', label: 'Pricing Rules' },
   { id: 'invoice', label: 'Invoice Settings' },
@@ -132,8 +160,14 @@ type ServiceFormState = {
   baseFee: string;
   code: string;
   description: string;
-  domainCode: string;
   icon: string;
+  isActive: boolean;
+  name: string;
+  sortOrder: string;
+};
+
+type ServiceDomainFormState = {
+  code: string;
   isActive: boolean;
   name: string;
   sortOrder: string;
@@ -233,6 +267,20 @@ type RbacRoleFormState = {
   description: string;
   isActive: boolean;
   name: string;
+};
+
+type AdminUserFormState = {
+  city: string;
+  displayName: string;
+  email: string;
+  jobTitle: string;
+  loginEnabled: boolean;
+  note: string;
+  phone: string;
+  requirePasswordRotation: boolean;
+  roleCode: string;
+  sendSetupEmail: boolean;
+  state: string;
 };
 
 type TeamMemberFormState = {
@@ -352,8 +400,132 @@ const TEAM_MEMBER_TYPE_OPTIONS: Array<{ label: string; value: TeamMemberType }> 
   { label: 'Field partner', value: 'field_partner' },
 ];
 
+const PROTECTED_ROLE_CODES = new Set([
+  'bootstrap_admin',
+  'ops_admin',
+  'owner',
+  'root',
+  'super_admin',
+  'system_admin',
+]);
+
+const PROTECTED_ASSIGNER_ROLE_CODES = new Set(['ops_admin', 'bootstrap_admin', 'owner', 'root', 'super_admin', 'system_admin']);
+
+const ADMIN_USER_CREATION_BLOCKED_ROLE_CODES = new Set([
+  'advocate',
+  'billing_admin',
+  'billing_staff',
+  'case_staff',
+  'client',
+  'field_staff',
+  'internal_staff',
+]);
+
+const ROLE_EXPLANATIONS: Record<string, string> = {
+  advocate: 'Can access assigned matters and related work only.',
+  billing_admin: 'Can manage billing workflows without global RBAC access.',
+  billing_staff: 'Can access billing only.',
+  case_staff: 'Can access assigned clients, matters, documents, messages, and meetings.',
+  ops_admin: 'Can access operational admin areas and protected administration.',
+};
+
+const MODULE_LABELS: Record<string, string> = {
+  audit: 'Audit',
+  billing: 'Billing',
+  client_account: 'Clients',
+  clients: 'Clients',
+  dashboard: 'Dashboard',
+  document: 'Documents',
+  documents: 'Documents',
+  event: 'Meetings',
+  events: 'Meetings',
+  invoice: 'Billing',
+  matter: 'Matters',
+  matters: 'Matters',
+  message: 'Messages',
+  messages: 'Messages',
+  notification: 'Notifications',
+  notifications: 'Notifications',
+  payment: 'Billing',
+  rbac: 'RBAC',
+  refund: 'Billing',
+  report: 'Reports',
+  reports: 'Reports',
+  settings: 'Settings',
+};
+
+const MODULE_ORDER = [
+  'Dashboard',
+  'Clients',
+  'Matters',
+  'Documents',
+  'Messages',
+  'Meetings',
+  'Billing',
+  'Reports',
+  'Notifications',
+  'Settings',
+  'RBAC',
+  'Audit',
+];
+
 const formatTeamMemberType = (type: TeamMemberType) =>
   TEAM_MEMBER_TYPE_OPTIONS.find((option) => option.value === type)?.label || type;
+
+const loginRoleForTeamMember = (type: TeamMemberType) => {
+  if (type === 'internal_staff') {
+    return 'case_staff';
+  }
+  if (type === 'external_counsel') {
+    return 'advocate';
+  }
+  return null;
+};
+
+const loginActionLabelForTeamMember = (type: TeamMemberType) => {
+  if (type === 'internal_staff') {
+    return 'Enable staff login';
+  }
+  if (type === 'external_counsel') {
+    return 'Enable advocate login';
+  }
+  return 'Login not enabled';
+};
+
+const isProtectedRoleCode = (roleCode: string) => PROTECTED_ROLE_CODES.has(roleCode);
+
+const roleExplanation = (role: SettingsWorkspaceResponse['rbac']['roles'][number]) =>
+  role.description || ROLE_EXPLANATIONS[role.code] || 'Custom access policy managed by RBAC.';
+
+const permissionModuleLabel = (moduleName: string) => MODULE_LABELS[moduleName] || moduleName;
+
+const permissionActionLabel = (permission: SettingsWorkspaceResponse['rbac']['permissions'][number]) => {
+  const segments = permission.code.split('.');
+  const raw = permission.actionName || segments[segments.length - 1] || permission.code;
+  const normalized = raw.replace(/_/g, ' ');
+  const label = normalized.replace(/\b\w/g, (letter) => letter.toUpperCase());
+  if (permission.code.endsWith('_assigned') || permission.code.includes('.view_assigned')) {
+    return `${label.replace(/ Assigned$/i, '')} · Assigned only`;
+  }
+  return label;
+};
+
+const userTypeLabel = (user: SettingsWorkspaceResponse['rbac']['users'][number]) => {
+  const roles = new Set(user.roleCodes);
+  if (roles.has('ops_admin') || roles.has('super_admin') || roles.has('owner') || roles.has('root')) {
+    return 'Ops / admin';
+  }
+  if (roles.has('billing_staff') || roles.has('billing_admin')) {
+    return 'Billing staff';
+  }
+  if (roles.has('case_staff')) {
+    return 'Internal staff';
+  }
+  if (roles.has('advocate') || user.actorTypeCode === 'counsel') {
+    return 'Advocate / external counsel';
+  }
+  return 'Admin user';
+};
 
 const formatPricingAmount = (amount: number, currencyCode = 'USD') => {
   return formatCurrency(amount, currencyCode);
@@ -386,6 +558,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   onArchivePriceOverride,
   onArchiveReminderSetting,
   onArchiveService,
+  onArchiveServiceDomain,
   onArchiveTeamMember,
   onArchiveTemplate,
   onArchiveUrgencyRule,
@@ -396,11 +569,14 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   onCreateCountryPricing,
   onCreatePriceOverride,
   onCreateRbacRole,
+  onCreateAdminUser,
   onCreateReminderSetting,
   onCreateService,
+  onCreateServiceDomain,
   onCreateTeamMember,
   onCreateTemplate,
   onCreateUrgencyRule,
+  onEnableTeamMemberLogin,
   onSetDefaultTemplate,
   onArchiveRbacRole,
   onAssignRbacUserRole,
@@ -414,15 +590,19 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   onUpdatePriceOverride,
   onUpdateReminderSetting,
   onUpdateService,
+  onUpdateServiceDomain,
   onUpdateTeamMember,
+  onUpdateTeamMemberLogin,
   onUpdateTemplate,
   onUpdateUrgencyRule,
   onUpdateInvoiceSettings,
+  onUpdateAdminUser,
   onUpdatePlatformSetting,
   onUpdateRbacRole,
   onUpdateRbacRolePermissions,
   workspace,
 }) => {
+  const { currentUser } = useAdminSession();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const invoiceSettings = workspace.invoiceConfiguration.settings;
   const platformSettingsByKey = useMemo(
@@ -448,6 +628,7 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   const [teamRegistryMessage, setTeamRegistryMessage] = useState('');
   const [teamRegistryError, setTeamRegistryError] = useState('');
   const [isSavingTeamMember, setIsSavingTeamMember] = useState(false);
+  const [enablingTeamMemberId, setEnablingTeamMemberId] = useState<string | null>(null);
   const [teamFilterActive, setTeamFilterActive] = useState<'active' | 'all' | 'inactive'>('all');
   const [teamFilterLocation, setTeamFilterLocation] = useState('');
   const [teamFilterSpecialization, setTeamFilterSpecialization] = useState('');
@@ -553,13 +734,11 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     PRICING_PLATFORM_KEYS.showApproximateLocalCurrency
   );
   const showApproximateLocalCurrency = settingBooleanValue(approximateLocalCurrencySetting, true);
-  const firstDomainCode = workspace.serviceDomains.find((domain) => domain.isActive)?.code || workspace.serviceDomains[0]?.code || '';
   const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [serviceForm, setServiceForm] = useState<ServiceFormState>({
     baseFee: '1000',
     code: '',
     description: '',
-    domainCode: firstDomainCode,
     icon: 'Briefcase',
     isActive: true,
     name: '',
@@ -568,6 +747,16 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   const [serviceMessage, setServiceMessage] = useState('');
   const [serviceError, setServiceError] = useState('');
   const [isSavingService, setIsSavingService] = useState(false);
+  const [editingServiceDomainCode, setEditingServiceDomainCode] = useState<string | null>(null);
+  const [serviceDomainForm, setServiceDomainForm] = useState<ServiceDomainFormState>({
+    code: '',
+    isActive: true,
+    name: '',
+    sortOrder: '0',
+  });
+  const [serviceDomainMessage, setServiceDomainMessage] = useState('');
+  const [serviceDomainError, setServiceDomainError] = useState('');
+  const [isSavingServiceDomain, setIsSavingServiceDomain] = useState(false);
   const [editingSlabId, setEditingSlabId] = useState<string | null>(null);
   const [slabForm, setSlabForm] = useState<PricingSlabFormState>({
     baseAmount: '0',
@@ -693,6 +882,8 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   });
   const [isSavingReminder, setIsSavingReminder] = useState(false);
   const firstRoleCode = workspace.rbac.roles[0]?.code || '';
+  const firstAssignableRoleCode =
+    workspace.rbac.roles.find((role) => role.isActive && role.code !== 'client')?.code || '';
   const [selectedRoleCode, setSelectedRoleCode] = useState(firstRoleCode);
   const [editingRbacRoleCode, setEditingRbacRoleCode] = useState<string | null>(null);
   const [rbacRoleForm, setRbacRoleForm] = useState<RbacRoleFormState>({
@@ -703,12 +894,26 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   });
   const [selectedPermissionCodes, setSelectedPermissionCodes] = useState<string[]>([]);
   const [rbacUserId, setRbacUserId] = useState(workspace.rbac.users[0]?.id || '');
-  const [rbacUserRoleCode, setRbacUserRoleCode] = useState(
-    workspace.rbac.roles.find((role) => role.isActive && role.code !== 'client')?.code || ''
-  );
+  const [rbacUserRoleCode, setRbacUserRoleCode] = useState(firstAssignableRoleCode);
+  const [adminUserRoleSelections, setAdminUserRoleSelections] = useState<Record<string, string>>({});
+  const [showAdminUserForm, setShowAdminUserForm] = useState(false);
+  const [adminUserForm, setAdminUserForm] = useState<AdminUserFormState>({
+    city: '',
+    displayName: '',
+    email: '',
+    jobTitle: '',
+    loginEnabled: true,
+    note: '',
+    phone: '',
+    requirePasswordRotation: true,
+    roleCode: firstAssignableRoleCode,
+    sendSetupEmail: true,
+    state: '',
+  });
   const [rbacMessage, setRbacMessage] = useState('');
   const [rbacError, setRbacError] = useState('');
   const [isSavingRbac, setIsSavingRbac] = useState(false);
+  const [rbacActiveTab, setRbacActiveTab] = useState<RbacWorkspaceTab>('overview');
 
   const sortedServices = useMemo(
     () =>
@@ -716,6 +921,13 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
         (left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)
       ),
     [workspace.services]
+  );
+  const sortedServiceDomains = useMemo(
+    () =>
+      [...workspace.serviceDomains].sort(
+        (left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)
+      ),
+    [workspace.serviceDomains]
   );
 
   const selectedRole = useMemo(
@@ -728,17 +940,80 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     [workspace.rbac.roles]
   );
 
+  const canAssignProtectedRoles = useMemo(
+    () => Boolean(currentUser?.roleCodes.some((roleCode) => PROTECTED_ASSIGNER_ROLE_CODES.has(roleCode))),
+    [currentUser?.roleCodes]
+  );
+
+  const adminCreationRoles = useMemo(
+    () =>
+      activeAssignableRoles.filter(
+        (role) =>
+          !ADMIN_USER_CREATION_BLOCKED_ROLE_CODES.has(role.code) &&
+          (!isProtectedRoleCode(role.code) || canAssignProtectedRoles)
+      ),
+    [activeAssignableRoles, canAssignProtectedRoles]
+  );
+
+  const canEnableTeamMemberLogin =
+    Boolean(onEnableTeamMemberLogin) && workspace.teamRegistry.canManage && workspace.rbac.canManage;
+  const canUpdateTeamMemberLogin =
+    Boolean(onUpdateTeamMemberLogin) && workspace.teamRegistry.canManage && workspace.rbac.canManage;
+
   const permissionsByModule = useMemo(() => {
     const groups = new Map<string, SettingsWorkspaceResponse['rbac']['permissions']>();
 
     workspace.rbac.permissions.forEach((permission) => {
-      const next = groups.get(permission.moduleName) || [];
+      const moduleName = permissionModuleLabel(permission.moduleName);
+      const next = groups.get(moduleName) || [];
       next.push(permission);
-      groups.set(permission.moduleName, next);
+      groups.set(moduleName, next);
     });
 
-    return Array.from(groups.entries());
+    return Array.from(groups.entries()).sort(([left], [right]) => {
+      const leftIndex = MODULE_ORDER.indexOf(left);
+      const rightIndex = MODULE_ORDER.indexOf(right);
+      if (leftIndex === -1 && rightIndex === -1) {
+        return left.localeCompare(right);
+      }
+      if (leftIndex === -1) {
+        return 1;
+      }
+      if (rightIndex === -1) {
+        return -1;
+      }
+      return leftIndex - rightIndex;
+    });
   }, [workspace.rbac.permissions]);
+
+  const rolePermissionSummaries = useMemo(() => {
+    const permissionsByCode = new Map(workspace.rbac.permissions.map((permission) => [permission.code, permission]));
+    return new Map(
+      workspace.rbac.roles.map((role) => {
+        const moduleCounts = new Map<string, number>();
+        role.permissionCodes.forEach((permissionCode) => {
+          const permission = permissionsByCode.get(permissionCode);
+          const moduleName = permission ? permissionModuleLabel(permission.moduleName) : 'Other';
+          moduleCounts.set(moduleName, (moduleCounts.get(moduleName) || 0) + 1);
+        });
+        return [role.code, Array.from(moduleCounts.entries())];
+      })
+    );
+  }, [workspace.rbac.permissions, workspace.rbac.roles]);
+
+  const rbacOverviewStats = useMemo(() => {
+    const users = workspace.rbac.users;
+    return {
+      protectedRoles: workspace.rbac.roles.filter((role) => isProtectedRoleCode(role.code)).length,
+      roles: workspace.rbac.roles.length,
+      users: users.length,
+    };
+  }, [workspace.rbac.roles, workspace.rbac.users]);
+
+  const roleNameByCode = useMemo(
+    () => new Map(workspace.rbac.roles.map((role) => [role.code, role.name])),
+    [workspace.rbac.roles]
+  );
 
   useEffect(() => {
     setGeneralForm(buildGeneralPlatformForm(workspace.platformSettings));
@@ -757,10 +1032,49 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
   }, [rbacUserId, workspace.rbac.users]);
 
   useEffect(() => {
-    if (!activeAssignableRoles.some((role) => role.code === rbacUserRoleCode)) {
-      setRbacUserRoleCode(activeAssignableRoles[0]?.code || '');
+    setAdminUserRoleSelections((current) => {
+      const next: Record<string, string> = {};
+      for (const user of workspace.rbac.users) {
+        const fallbackRole =
+          user.roleCodes.find((roleCode) => adminCreationRoles.some((role) => role.code === roleCode)) ||
+          adminCreationRoles[0]?.code ||
+          '';
+        next[user.id] = current[user.id] || fallbackRole;
+      }
+      return next;
+    });
+  }, [adminCreationRoles, workspace.rbac.users]);
+
+  useEffect(() => {
+    if (!adminCreationRoles.some((role) => role.code === rbacUserRoleCode)) {
+      setRbacUserRoleCode(adminCreationRoles[0]?.code || '');
     }
-  }, [activeAssignableRoles, rbacUserRoleCode]);
+  }, [adminCreationRoles, rbacUserRoleCode]);
+
+  useEffect(() => {
+    if (!adminCreationRoles.some((role) => role.code === adminUserForm.roleCode)) {
+      setAdminUserForm((current) => ({ ...current, roleCode: adminCreationRoles[0]?.code || '' }));
+    }
+  }, [adminCreationRoles, adminUserForm.roleCode]);
+
+  useEffect(() => {
+    if (activeTab !== 'adminUsers' && showAdminUserForm) {
+      setShowAdminUserForm(false);
+      setAdminUserForm({
+        city: '',
+        displayName: '',
+        email: '',
+        jobTitle: '',
+        loginEnabled: true,
+        note: '',
+        phone: '',
+        requirePasswordRotation: true,
+        roleCode: adminCreationRoles[0]?.code || '',
+        sendSetupEmail: true,
+        state: '',
+      });
+    }
+  }, [activeTab, adminCreationRoles, showAdminUserForm]);
 
   useEffect(() => {
     if (!selectedRole) {
@@ -997,13 +1311,98 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     }
   };
 
+  const enableTeamMemberLogin = async (
+    member: SettingsWorkspaceResponse['teamRegistry']['members'][number]
+  ) => {
+    if (!onEnableTeamMemberLogin || !canEnableTeamMemberLogin) {
+      setTeamRegistryError('Login enablement requires Team & Counsel and RBAC management access.');
+      return;
+    }
+
+    if (!member.active) {
+      setTeamRegistryError('Activate this Team & Counsel profile before enabling login.');
+      return;
+    }
+
+    if (!member.email.trim()) {
+      setTeamRegistryError('Add an email to this Team & Counsel profile before enabling login.');
+      return;
+    }
+
+    const roleCode = loginRoleForTeamMember(member.type);
+    if (!roleCode) {
+      setTeamRegistryError('Field partner login is not enabled yet.');
+      return;
+    }
+
+    setTeamRegistryError('');
+    setTeamRegistryMessage('');
+    setEnablingTeamMemberId(member.id);
+
+    try {
+      const result = await onEnableTeamMemberLogin(member.id, {
+        requirePasswordRotation: true,
+        roleCode,
+        sendSetupEmail: true,
+      });
+      const setupCopy =
+        result.setupEmailStatus === 'sent'
+          ? 'Setup email sent.'
+          : result.setupEmailStatus === 'preview'
+            ? 'Setup email is in preview mode.'
+            : result.setupEmailStatus === 'skipped_provider_disabled'
+              ? 'Email delivery is disabled; password setup requires manual follow-up.'
+              : result.setupEmailStatus === 'failed'
+                ? 'Setup email could not be sent; use password reset after email delivery is fixed.'
+                : 'Password setup requires manual follow-up.';
+      setTeamRegistryMessage(
+        `${member.name} can now set a password and sign in with the ${roleNameByCode.get(roleCode) || roleCode} role. ${setupCopy}`
+      );
+    } catch (error) {
+      setTeamRegistryError(error instanceof Error ? error.message : 'Unable to enable login for this profile.');
+    } finally {
+      setEnablingTeamMemberId(null);
+    }
+  };
+
+  const updateTeamMemberLogin = async (
+    member: SettingsWorkspaceResponse['teamRegistry']['members'][number],
+    loginEnabled: boolean
+  ) => {
+    if (!onUpdateTeamMemberLogin || !canUpdateTeamMemberLogin) {
+      setTeamRegistryError('Login status changes require Team & Counsel and RBAC management access.');
+      return;
+    }
+
+    if (!member.loginConfigured) {
+      setTeamRegistryError('Enable login for this Team & Counsel profile before changing login status.');
+      return;
+    }
+
+    setTeamRegistryError('');
+    setTeamRegistryMessage('');
+    setEnablingTeamMemberId(member.id);
+
+    try {
+      const result = await onUpdateTeamMemberLogin(member.id, { loginEnabled });
+      const sessionCopy =
+        !loginEnabled && result.sessionsRevoked ? ' Active sessions were revoked.' : '';
+      setTeamRegistryMessage(
+        `${member.name} login ${loginEnabled ? 'enabled' : 'disabled'}.${sessionCopy}`
+      );
+    } catch (error) {
+      setTeamRegistryError(error instanceof Error ? error.message : 'Unable to update login for this profile.');
+    } finally {
+      setEnablingTeamMemberId(null);
+    }
+  };
+
   const resetServiceForm = () => {
     setEditingServiceId(null);
     setServiceForm({
       baseFee: '1000',
       code: '',
       description: '',
-      domainCode: firstDomainCode,
       icon: 'Briefcase',
       isActive: true,
       name: '',
@@ -1038,7 +1437,6 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
       const payload = {
         baseFee,
         description: serviceForm.description.trim() || null,
-        domainCode: serviceForm.domainCode.trim() || null,
         icon: serviceForm.icon.trim() || null,
         isActive: serviceForm.isActive,
         name: serviceForm.name.trim(),
@@ -1072,7 +1470,6 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
       baseFee: String(service.baseFee || 0),
       code: service.code,
       description: service.description,
-      domainCode: service.domainCode || '',
       icon: service.icon || 'Briefcase',
       isActive: service.isActive,
       name: service.name,
@@ -1100,6 +1497,99 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
       setServiceError(error instanceof Error ? error.message : 'Unable to archive service.');
     } finally {
       setIsSavingService(false);
+    }
+  };
+
+  const resetServiceDomainForm = () => {
+    setEditingServiceDomainCode(null);
+    setServiceDomainForm({
+      code: '',
+      isActive: true,
+      name: '',
+      sortOrder: '0',
+    });
+  };
+
+  const submitServiceDomain = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!onCreateServiceDomain || !onUpdateServiceDomain) {
+      setServiceDomainError('Legal domain editing is not available for this admin session.');
+      return;
+    }
+
+    const sortOrder = Number(serviceDomainForm.sortOrder || 0);
+    if (!serviceDomainForm.name.trim()) {
+      setServiceDomainError('Legal domain name is required.');
+      return;
+    }
+    if (!Number.isInteger(sortOrder) || sortOrder < 0) {
+      setServiceDomainError('Display order must be non-negative.');
+      return;
+    }
+
+    setServiceDomainError('');
+    setServiceDomainMessage('');
+    setIsSavingServiceDomain(true);
+
+    try {
+      const payload = {
+        isActive: serviceDomainForm.isActive,
+        name: serviceDomainForm.name.trim(),
+        sortOrder,
+      };
+
+      if (editingServiceDomainCode) {
+        await onUpdateServiceDomain(editingServiceDomainCode, payload);
+        setServiceDomainMessage('Legal domain updated.');
+      } else {
+        await onCreateServiceDomain({
+          ...payload,
+          code: serviceDomainForm.code.trim() || undefined,
+        });
+        setServiceDomainMessage('Legal domain created.');
+      }
+
+      resetServiceDomainForm();
+    } catch (error) {
+      setServiceDomainError(error instanceof Error ? error.message : 'Unable to save legal domain.');
+    } finally {
+      setIsSavingServiceDomain(false);
+    }
+  };
+
+  const startEditServiceDomain = (domain: SettingsWorkspaceResponse['serviceDomains'][number]) => {
+    setEditingServiceDomainCode(domain.code);
+    setServiceDomainError('');
+    setServiceDomainMessage('');
+    setServiceDomainForm({
+      code: domain.code,
+      isActive: domain.isActive,
+      name: domain.name,
+      sortOrder: String(domain.sortOrder),
+    });
+  };
+
+  const archiveServiceDomain = async (domainCode: string) => {
+    if (!onArchiveServiceDomain) {
+      setServiceDomainError('Legal domain archive is not available for this admin session.');
+      return;
+    }
+
+    setServiceDomainError('');
+    setServiceDomainMessage('');
+    setIsSavingServiceDomain(true);
+
+    try {
+      await onArchiveServiceDomain(domainCode);
+      setServiceDomainMessage('Legal domain archived.');
+      if (editingServiceDomainCode === domainCode) {
+        resetServiceDomainForm();
+      }
+    } catch (error) {
+      setServiceDomainError(error instanceof Error ? error.message : 'Unable to archive legal domain.');
+    } finally {
+      setIsSavingServiceDomain(false);
     }
   };
 
@@ -1948,6 +2438,85 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     });
   };
 
+  const resetAdminUserForm = () => {
+    setAdminUserForm({
+      city: '',
+      displayName: '',
+      email: '',
+      jobTitle: '',
+      loginEnabled: true,
+      note: '',
+      phone: '',
+      requirePasswordRotation: true,
+      roleCode: adminCreationRoles[0]?.code || '',
+      sendSetupEmail: true,
+      state: '',
+    });
+  };
+
+  const submitAdminUser = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!onCreateAdminUser) {
+      setRbacError('Admin user creation is not available for this admin session.');
+      return;
+    }
+
+    if (!adminUserForm.displayName.trim()) {
+      setRbacError('Display name is required.');
+      return;
+    }
+
+    if (!adminUserForm.email.trim() || !adminUserForm.email.includes('@')) {
+      setRbacError('Enter a valid email address.');
+      return;
+    }
+
+    if (!adminUserForm.roleCode) {
+      setRbacError('Choose an admin role.');
+      return;
+    }
+
+    setRbacError('');
+    setRbacMessage('');
+    setIsSavingRbac(true);
+
+    try {
+      const result = await onCreateAdminUser({
+        city: adminUserForm.city.trim() || null,
+        displayName: adminUserForm.displayName.trim(),
+        email: adminUserForm.email.trim().toLowerCase(),
+        jobTitle: adminUserForm.jobTitle.trim() || null,
+        loginEnabled: adminUserForm.loginEnabled,
+        note: adminUserForm.note.trim() || null,
+        phone: adminUserForm.phone.trim() || null,
+        provisioningKind: 'admin',
+        requirePasswordRotation: adminUserForm.requirePasswordRotation,
+        roleCode: adminUserForm.roleCode,
+        sendSetupEmail: adminUserForm.sendSetupEmail,
+        state: adminUserForm.state.trim() || null,
+      });
+
+      const setupCopy =
+        result.setupEmailStatus === 'sent'
+          ? 'Setup email sent.'
+          : result.setupEmailStatus === 'preview'
+            ? 'Setup email is in preview mode.'
+            : result.setupEmailStatus === 'skipped_provider_disabled'
+              ? 'Email delivery is disabled; password setup requires manual follow-up.'
+              : result.setupEmailStatus === 'failed'
+                ? 'Setup email could not be sent; use password reset after email delivery is fixed.'
+                : 'Password setup requires manual follow-up.';
+      setRbacMessage(`Admin created. They must set a password before signing in. ${setupCopy}`);
+      resetAdminUserForm();
+      setShowAdminUserForm(false);
+    } catch (error) {
+      setRbacError(error instanceof Error ? error.message : 'Unable to create admin user.');
+    } finally {
+      setIsSavingRbac(false);
+    }
+  };
+
   const startEditRbacRole = (role: SettingsWorkspaceResponse['rbac']['roles'][number]) => {
     setEditingRbacRoleCode(role.code);
     setSelectedRoleCode(role.code);
@@ -2081,9 +2650,34 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     }
   };
 
-  const removeRbacRole = async (userId: string, roleCode: string) => {
+  const assignAdminUserRole = async (userId: string, roleCode: string) => {
+    if (!onAssignRbacUserRole) {
+      setRbacError('Admin role assignment is not available for this admin session.');
+      return;
+    }
+
+    if (!userId || !roleCode) {
+      setRbacError('Choose an admin user and role.');
+      return;
+    }
+
+    setRbacError('');
+    setRbacMessage('');
+    setIsSavingRbac(true);
+
+    try {
+      await onAssignRbacUserRole(userId, roleCode);
+      setRbacMessage('Admin role assigned.');
+    } catch (error) {
+      setRbacError(error instanceof Error ? error.message : 'Unable to assign admin role.');
+    } finally {
+      setIsSavingRbac(false);
+    }
+  };
+
+  const removeAdminUserRole = async (userId: string, roleCode: string) => {
     if (!onRemoveRbacUserRole) {
-      setRbacError('User role removal is not available for this admin session.');
+      setRbacError('Admin role removal is not available for this admin session.');
       return;
     }
 
@@ -2093,9 +2687,37 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
 
     try {
       await onRemoveRbacUserRole(userId, roleCode);
-      setRbacMessage('Role removed.');
+      setRbacMessage('Admin role removed.');
     } catch (error) {
-      setRbacError(error instanceof Error ? error.message : 'Unable to remove role.');
+      setRbacError(error instanceof Error ? error.message : 'Unable to remove admin role.');
+    } finally {
+      setIsSavingRbac(false);
+    }
+  };
+
+  const updateAdminUserLogin = async (userId: string, loginEnabled: boolean) => {
+    if (!onUpdateAdminUser) {
+      setRbacError('Admin user status changes are not available for this admin session.');
+      return;
+    }
+
+    setRbacError('');
+    setRbacMessage('');
+    setIsSavingRbac(true);
+
+    try {
+      const result = await onUpdateAdminUser(userId, { loginEnabled });
+      if (loginEnabled) {
+        setRbacMessage('Admin login re-enabled.');
+      } else {
+        setRbacMessage(
+          result.sessionsRevoked
+            ? 'Admin login disabled and active sessions revoked.'
+            : 'Admin login disabled.'
+        );
+      }
+    } catch (error) {
+      setRbacError(error instanceof Error ? error.message : 'Unable to update admin user.');
     } finally {
       setIsSavingRbac(false);
     }
@@ -2475,6 +3097,13 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                 icon={Users}
                 title="Team & Counsel Registry"
               />
+              <div className="rounded-xl border border-[#E6E4DD] bg-[#FFF7E6] p-4 text-sm text-[#6F5B21]">
+                <strong className="font-semibold">Profiles come first, login comes second.</strong>
+                <span className="mt-1 block">
+                  Create staff, field staff, and external counsel profiles here. Use Enable login on an existing profile
+                  only when that person needs admin-panel access. Roles decide modules; matter assignments decide records.
+                </span>
+              </div>
               <form className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5" onSubmit={submitTeamMember}>
                 <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -2655,6 +3284,21 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                           >
                             {member.active ? 'Active' : 'Inactive'}
                           </span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              member.loginEnabled
+                                ? 'bg-blue-50 text-blue-700'
+                                : member.loginConfigured
+                                  ? 'bg-amber-50 text-amber-700'
+                                : 'bg-[#FCFBF8] text-[#8C8981]'
+                            }`}
+                          >
+                            {member.loginEnabled
+                              ? 'Login enabled'
+                              : member.loginConfigured
+                                ? 'Login disabled'
+                                : 'No login'}
+                          </span>
                         </div>
                         <p className="text-xs text-[#8C8981]">
                           {[member.specialization, member.city, member.state, member.country]
@@ -2677,6 +3321,72 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                         >
                           Edit
                         </button>
+                        {member.loginEnabled ? (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={!canUpdateTeamMemberLogin || Boolean(enablingTeamMemberId)}
+                            onClick={() => void updateTeamMemberLogin(member, false)}
+                            title={
+                              !canUpdateTeamMemberLogin
+                                ? 'Requires Team & Counsel and RBAC management access.'
+                                : undefined
+                            }
+                            type="button"
+                          >
+                            {enablingTeamMemberId === member.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : null}
+                            Disable login
+                          </button>
+                        ) : member.loginConfigured ? (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-lg border border-[#CFE0EB] bg-[#F3F8FB] px-3 py-2 text-xs font-medium text-[#4D6C83] transition hover:bg-[#E7F1F7] disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={!canUpdateTeamMemberLogin || !member.active || Boolean(enablingTeamMemberId)}
+                            onClick={() => void updateTeamMemberLogin(member, true)}
+                            title={
+                              !canUpdateTeamMemberLogin
+                                ? 'Requires Team & Counsel and RBAC management access.'
+                                : !member.active
+                                  ? 'Activate this profile before re-enabling login.'
+                                  : undefined
+                            }
+                            type="button"
+                          >
+                            {enablingTeamMemberId === member.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : null}
+                            Re-enable login
+                          </button>
+                        ) : (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-lg border border-[#CFE0EB] bg-[#F3F8FB] px-3 py-2 text-xs font-medium text-[#4D6C83] transition hover:bg-[#E7F1F7] disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={
+                              !canEnableTeamMemberLogin ||
+                              !member.active ||
+                              !member.email.trim() ||
+                              !loginRoleForTeamMember(member.type) ||
+                              Boolean(enablingTeamMemberId)
+                            }
+                            onClick={() => void enableTeamMemberLogin(member)}
+                            title={
+                              !canEnableTeamMemberLogin
+                                ? 'Requires Team & Counsel and RBAC management access.'
+                                : !loginRoleForTeamMember(member.type)
+                                  ? 'Field partner login is not enabled yet.'
+                                : !member.active
+                                  ? 'Activate this profile before enabling login.'
+                                  : !member.email.trim()
+                                    ? 'Add an email before enabling login.'
+                                    : undefined
+                            }
+                            type="button"
+                          >
+                            {enablingTeamMemberId === member.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : null}
+                            {loginActionLabelForTeamMember(member.type)}
+                          </button>
+                        )}
                         <button
                           className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                           disabled={!workspace.teamRegistry.canManage || !member.active || isSavingTeamMember}
@@ -2700,6 +3410,119 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                 icon={Layers}
                 title="Service Catalog"
               />
+              <form className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5" onSubmit={submitServiceDomain}>
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h3 className="text-sm font-medium text-[#2C2B29]">
+                      {editingServiceDomainCode ? 'Edit Legal Domain' : 'Create Legal Domain'}
+                    </h3>
+                    <p className="mt-1 text-xs text-[#8C8981]">
+                      Legal domains classify requests and matters. Primary services stay independent.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {editingServiceDomainCode ? (
+                      <button
+                        className="rounded-lg border border-[#E6E4DD] bg-white px-4 py-2 text-sm text-[#5A7C96] transition hover:bg-[#F4F1EA]"
+                        onClick={resetServiceDomainForm}
+                        type="button"
+                      >
+                        New Domain
+                      </button>
+                    ) : null}
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#2C2B29] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4A4946] disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!onCreateServiceDomain || !onUpdateServiceDomain || isSavingServiceDomain}
+                      type="submit"
+                    >
+                      {isSavingServiceDomain ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      {editingServiceDomainCode ? 'Save Domain' : 'Create Domain'}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <SettingsInput
+                    label="Domain Name"
+                    onChange={(value) => setServiceDomainForm((current) => ({ ...current, name: value }))}
+                    value={serviceDomainForm.name}
+                  />
+                  <SettingsInput
+                    disabled={Boolean(editingServiceDomainCode)}
+                    label="Domain Code"
+                    onChange={(value) => setServiceDomainForm((current) => ({ ...current, code: value }))}
+                    placeholder="Auto from name"
+                    value={serviceDomainForm.code}
+                  />
+                  <SettingsInput
+                    label="Display Order"
+                    onChange={(value) => setServiceDomainForm((current) => ({ ...current, sortOrder: value }))}
+                    type="number"
+                    value={serviceDomainForm.sortOrder}
+                  />
+                  <label className="flex items-center gap-3 rounded-lg border border-[#E6E4DD] bg-white px-3 py-2">
+                    <input
+                      checked={serviceDomainForm.isActive}
+                      className="h-4 w-4 accent-[#C19A5B]"
+                      onChange={(event) =>
+                        setServiceDomainForm((current) => ({ ...current, isActive: event.target.checked }))
+                      }
+                      type="checkbox"
+                    />
+                    <span className="text-sm text-[#2C2B29]">Active for new requests</span>
+                  </label>
+                </div>
+                {serviceDomainError ? (
+                  <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {serviceDomainError}
+                  </div>
+                ) : null}
+                {serviceDomainMessage ? (
+                  <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                    {serviceDomainMessage}
+                  </div>
+                ) : null}
+              </form>
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-[#2C2B29]">Legal domains</h3>
+                  <span className="text-xs text-[#8C8981]">{sortedServiceDomains.length} domains</span>
+                </div>
+                <div className="space-y-3">
+                  {sortedServiceDomains.map((domain) => (
+                    <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4" key={domain.code}>
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-[#2C2B29]">{domain.name}</p>
+                          <p className="mt-2 text-[11px] uppercase tracking-[0.2em] text-[#A8A69F]">{domain.code}</p>
+                        </div>
+                        <MetaPill label={domain.isActive ? 'Active' : 'Inactive'} tone={domain.isActive ? 'green' : 'neutral'} />
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          className="rounded-lg border border-[#E6E4DD] bg-white px-3 py-1.5 text-xs text-[#5A7C96] transition hover:bg-[#F4F1EA]"
+                          onClick={() => startEditServiceDomain(domain)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="rounded-lg border border-[#E6E4DD] bg-white px-3 py-1.5 text-xs text-[#8C8981] transition hover:bg-[#F4F1EA] disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!domain.isActive || isSavingServiceDomain}
+                          onClick={() => void archiveServiceDomain(domain.code)}
+                          type="button"
+                        >
+                          Archive
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {sortedServiceDomains.length === 0 ? (
+                    <p className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-4 text-sm text-[#8C8981]">
+                      No legal domains configured.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
               <form className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5" onSubmit={submitService}>
                 <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -2763,15 +3586,6 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                     ]}
                     value={serviceForm.icon}
                   />
-                  <SettingsSelect
-                    label="Optional Internal Category"
-                    onChange={(value) => setServiceForm((current) => ({ ...current, domainCode: value }))}
-                    options={workspace.serviceDomains
-                      .filter((domain) => domain.isActive)
-                      .map((domain) => ({ label: domain.name, value: domain.code }))
-                      .concat([{ label: 'Unclassified / independent', value: '' }])}
-                    value={serviceForm.domainCode}
-                  />
                   <SettingsInput
                     label="Display Order"
                     onChange={(value) => setServiceForm((current) => ({ ...current, sortOrder: value }))}
@@ -2824,11 +3638,6 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                             <p className="mt-2 text-xs font-medium text-[#5A7C96]">
                               Base fee: {formatCurrency(service.baseFee)}
                             </p>
-                            {service.domainName ? (
-                              <p className="mt-1 text-[11px] text-[#A8A69F]">
-                                Internal category: {service.domainName}
-                              </p>
-                            ) : null}
                           </div>
                           <MetaPill label={service.isActive ? 'Active' : 'Inactive'} tone={service.isActive ? 'green' : 'neutral'} />
                         </div>
@@ -4142,23 +4951,19 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
             </div>
           ) : null}
 
-          {activeTab === 'roles' ? (
+          {activeTab === 'adminUsers' ? (
             <div className="space-y-6">
               <SectionHeader
-                description="Manage custom admin roles, permission grants, and staff role assignments with built-in lockout protections."
+                description="Manage admin-panel login users, setup status, MFA readiness, and role assignment."
                 icon={Shield}
-                title="Roles & Permissions"
+                title="Admin Users"
               />
               {!workspace.rbac.canManage ? (
                 <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-6 text-sm text-[#8C8981]">
-                  Your current admin role can view the settings surface, but RBAC detail is restricted to actors with `rbac.manage`.
+                  You do not have permission to manage admin users.
                 </div>
               ) : (
                 <>
-                  <div className="rounded-xl border border-[#E6E4DD] bg-[#FFF7E6] p-4 text-sm text-[#6F5B21]">
-                    System roles, client access, and the final `ops_admin` assignment are protected by the server.
-                    Changes to your own access are blocked if they would remove dashboard, settings, or RBAC management.
-                  </div>
                   {rbacError ? (
                     <div className="rounded-xl border border-[#F1B8B8] bg-[#FFF5F5] p-4 text-sm text-[#9E3D3D]">
                       {rbacError}
@@ -4169,8 +4974,446 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                       {rbacMessage}
                     </div>
                   ) : null}
-                  <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-5">
-                    <div className="space-y-4">
+
+                  <div className="rounded-xl border border-[#E6E4DD] bg-[#FFF7E6] p-4 text-sm text-[#6F5B21]">
+                    <strong className="font-semibold">Admin Users is only for admin login accounts.</strong>
+                    <span className="mt-1 block">
+                      Create staff, field staff, and external counsel profiles in Team & Counsel first. Login enablement for those
+                      profiles is handled from Team & Counsel in a separate flow.
+                    </span>
+                  </div>
+
+                  <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <h3 className="text-sm font-medium text-[#2C2B29]">Login-enabled admin users</h3>
+                        <p className="mt-1 text-xs text-[#8C8981]">
+                          Create only admin or internal admin accounts here. No password is generated or shown.
+                        </p>
+                      </div>
+                      <button
+                        className="inline-flex items-center justify-center rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-sm font-medium text-[#5A7C96] transition hover:bg-[#F4F1EA]"
+                        onClick={() => {
+                          setShowAdminUserForm((current) => {
+                            if (current) {
+                              resetAdminUserForm();
+                            }
+                            return !current;
+                          });
+                          setRbacError('');
+                          setRbacMessage('');
+                        }}
+                        type="button"
+                      >
+                        {showAdminUserForm ? 'Close' : 'New Admin'}
+                      </button>
+                    </div>
+
+                    {showAdminUserForm ? (
+                      <form className="mt-5 space-y-4" onSubmit={submitAdminUser}>
+                        <div className="rounded-xl border border-[#E6E4DD] bg-white p-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#A8A69F]">Step 1</p>
+                          <h4 className="mt-1 text-sm font-medium text-[#2C2B29]">Basic details</h4>
+                          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <SettingsInput
+                              label="Display name"
+                              onChange={(value) => setAdminUserForm((current) => ({ ...current, displayName: value }))}
+                              value={adminUserForm.displayName}
+                            />
+                            <SettingsInput
+                              label="Email"
+                              onChange={(value) => setAdminUserForm((current) => ({ ...current, email: value }))}
+                              type="text"
+                              value={adminUserForm.email}
+                            />
+                            <SettingsInput
+                              label="Phone"
+                              onChange={(value) => setAdminUserForm((current) => ({ ...current, phone: value }))}
+                              value={adminUserForm.phone}
+                            />
+                            <SettingsInput
+                              label="Job title"
+                              onChange={(value) => setAdminUserForm((current) => ({ ...current, jobTitle: value }))}
+                              value={adminUserForm.jobTitle}
+                            />
+                            <SettingsInput
+                              label="City"
+                              onChange={(value) => setAdminUserForm((current) => ({ ...current, city: value }))}
+                              value={adminUserForm.city}
+                            />
+                            <SettingsInput
+                              label="State"
+                              onChange={(value) => setAdminUserForm((current) => ({ ...current, state: value }))}
+                              value={adminUserForm.state}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl border border-[#E6E4DD] bg-white p-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#A8A69F]">Step 2</p>
+                          <h4 className="mt-1 text-sm font-medium text-[#2C2B29]">Assign admin role</h4>
+                          <p className="mt-1 text-xs text-[#8C8981]">
+                            Staff, advocate, client, and billing roles are not available in the New Admin flow.
+                          </p>
+                          <label className="mt-3 block text-sm text-[#5A5751]">
+                            <span className="mb-1 block text-xs uppercase tracking-[0.16em] text-[#A8A69F]">Role</span>
+                            <select
+                              className="w-full rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-sm text-[#2C2B29]"
+                              onChange={(event) =>
+                                setAdminUserForm((current) => ({ ...current, roleCode: event.target.value }))
+                              }
+                              value={adminUserForm.roleCode}
+                            >
+                              {adminCreationRoles.map((role) => (
+                                <option key={role.code} value={role.code}>
+                                  {role.name}{isProtectedRoleCode(role.code) ? ' · Protected role' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {adminCreationRoles.length === 0 ? (
+                            <p className="mt-2 text-xs text-[#8C8981]">
+                              No assignable admin roles are available for your account.
+                            </p>
+                          ) : null}
+                        </div>
+
+                        <div className="rounded-xl border border-[#E6E4DD] bg-white p-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#A8A69F]">Step 3</p>
+                          <h4 className="mt-1 text-sm font-medium text-[#2C2B29]">Setup</h4>
+                          <div className="mt-3 flex flex-wrap gap-4 text-sm text-[#5A5751]">
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                checked={adminUserForm.loginEnabled}
+                                className="h-4 w-4 rounded border-[#D8D3C8]"
+                                onChange={(event) =>
+                                  setAdminUserForm((current) => ({ ...current, loginEnabled: event.target.checked }))
+                                }
+                                type="checkbox"
+                              />
+                              Login enabled
+                            </label>
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                checked={adminUserForm.sendSetupEmail}
+                                className="h-4 w-4 rounded border-[#D8D3C8]"
+                                onChange={(event) =>
+                                  setAdminUserForm((current) => ({ ...current, sendSetupEmail: event.target.checked }))
+                                }
+                                type="checkbox"
+                              />
+                              Send setup email
+                            </label>
+                            <label className="inline-flex items-center gap-2">
+                              <input
+                                checked={adminUserForm.requirePasswordRotation}
+                                className="h-4 w-4 rounded border-[#D8D3C8]"
+                                onChange={(event) =>
+                                  setAdminUserForm((current) => ({
+                                    ...current,
+                                    requirePasswordRotation: event.target.checked,
+                                  }))
+                                }
+                                type="checkbox"
+                              />
+                              Require password setup
+                            </label>
+                          </div>
+                          <SettingsTextArea
+                            label="Provisioning note"
+                            onChange={(value) => setAdminUserForm((current) => ({ ...current, note: value }))}
+                            value={adminUserForm.note}
+                          />
+                          <div className="mt-3 rounded-lg border border-[#E6E4DD] bg-[#FCFBF8] p-3 text-xs text-[#8C8981]">
+                            No password is generated or shown here. The user must set their password before signing in.
+                            MFA follows the admin policy after first login.
+                          </div>
+                          <button
+                            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#5A7C96] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4D6C83] disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isSavingRbac || !onCreateAdminUser || !adminUserForm.roleCode}
+                            type="submit"
+                          >
+                            {isSavingRbac ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                            Create Admin
+                          </button>
+                        </div>
+                      </form>
+                    ) : null}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-[#E6E4DD] bg-[#FCFBF8]">
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-[#E6E4DD] text-left text-sm">
+                        <thead className="bg-white text-[11px] uppercase tracking-[0.16em] text-[#A8A69F]">
+                          <tr>
+                            <th className="px-4 py-3">Name</th>
+                            <th className="px-4 py-3">Type</th>
+                            <th className="px-4 py-3">Role</th>
+                            <th className="px-4 py-3">Login</th>
+                            <th className="px-4 py-3">Password setup</th>
+                            <th className="px-4 py-3">MFA</th>
+                            <th className="px-4 py-3">Last login</th>
+                            <th className="px-4 py-3">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E6E4DD]">
+                          {workspace.rbac.users.map((user) => (
+                            <tr key={user.id} className="align-top">
+                              <td className="px-4 py-3">
+                                <p className="font-medium text-[#2C2B29]">{user.displayName}</p>
+                                <p className="mt-1 text-xs text-[#8C8981]">{user.email}</p>
+                              </td>
+                              <td className="px-4 py-3 text-[#5A5751]">{userTypeLabel(user)}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex flex-wrap gap-1">
+                                  {user.roleCodes.map((roleCode) => (
+                                    <button
+                                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                                        isProtectedRoleCode(roleCode)
+                                          ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                          : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                      }`}
+                                      disabled={isSavingRbac || !onRemoveRbacUserRole}
+                                      key={roleCode}
+                                      onClick={() => void removeAdminUserRole(user.id, roleCode)}
+                                      title="Remove this admin role"
+                                      type="button"
+                                    >
+                                      {roleNameByCode.get(roleCode) || roleCode} ×
+                                    </button>
+                                  ))}
+                                  {user.roleCodes.length === 0 ? (
+                                    <span className="text-xs text-[#A8A69F]">No active roles</span>
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">
+                                <MetaPill
+                                  label={user.loginEnabled ? 'Active' : 'Login disabled'}
+                                  tone={user.loginEnabled ? 'green' : 'neutral'}
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <MetaPill
+                                  label={
+                                    !user.credentialsCreated || user.mustRotatePassword
+                                      ? 'Setup pending'
+                                      : 'Password set'
+                                  }
+                                  tone={!user.credentialsCreated || user.mustRotatePassword ? 'amber' : 'green'}
+                                />
+                              </td>
+                              <td className="px-4 py-3">
+                                <MetaPill
+                                  label={user.mfaEnabled ? 'MFA enrolled' : 'MFA not enrolled'}
+                                  tone={user.mfaEnabled ? 'green' : 'amber'}
+                                />
+                              </td>
+                              <td className="px-4 py-3 text-xs text-[#8C8981]">
+                                {user.lastLoginAt ? formatDateTime(user.lastLoginAt) : 'Never'}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex min-w-[220px] flex-col gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <select
+                                      className="min-w-[150px] rounded-lg border border-[#E6E4DD] bg-white px-2 py-1.5 text-xs text-[#2C2B29]"
+                                      disabled={isSavingRbac || !onAssignRbacUserRole || adminCreationRoles.length === 0}
+                                      onChange={(event) =>
+                                        setAdminUserRoleSelections((current) => ({
+                                          ...current,
+                                          [user.id]: event.target.value,
+                                        }))
+                                      }
+                                      value={adminUserRoleSelections[user.id] || adminCreationRoles[0]?.code || ''}
+                                    >
+                                      {adminCreationRoles.map((role) => (
+                                        <option key={role.code} value={role.code}>
+                                          {role.name}{isProtectedRoleCode(role.code) ? ' · Protected' : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      className="rounded-lg border border-[#E6E4DD] bg-white px-3 py-1.5 text-xs text-[#5A7C96] transition hover:bg-[#F4F1EA] disabled:cursor-not-allowed disabled:opacity-50"
+                                      disabled={
+                                        isSavingRbac ||
+                                        !onAssignRbacUserRole ||
+                                        !adminUserRoleSelections[user.id]
+                                      }
+                                      onClick={() =>
+                                        void assignAdminUserRole(user.id, adminUserRoleSelections[user.id] || '')
+                                      }
+                                      type="button"
+                                    >
+                                      Assign role
+                                    </button>
+                                  </div>
+                                  <button
+                                    className="w-fit rounded-lg border border-[#E6E4DD] bg-white px-3 py-1.5 text-xs text-[#5A7C96] transition hover:bg-[#F4F1EA] disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={isSavingRbac || !onUpdateAdminUser}
+                                    onClick={() => void updateAdminUserLogin(user.id, !user.loginEnabled)}
+                                    type="button"
+                                  >
+                                    {user.loginEnabled ? 'Disable login' : 'Enable login'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {workspace.rbac.users.length === 0 ? (
+                            <tr>
+                              <td className="px-4 py-8 text-center text-sm text-[#8C8981]" colSpan={8}>
+                                No login users yet.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <form className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5" onSubmit={assignRbacRole}>
+                    <h3 className="text-sm font-medium text-[#2C2B29]">User Role Assignment</h3>
+                    <p className="mt-1 text-xs text-[#8C8981]">
+                      Change admin roles when needed. Staff, advocate, client, and billing roles are handled outside this admin-only flow.
+                    </p>
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <label className="text-sm text-[#5A5751]">
+                        <span className="mb-1 block text-xs uppercase tracking-[0.16em] text-[#A8A69F]">Admin user</span>
+                        <select
+                          className="w-full rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-sm text-[#2C2B29]"
+                          onChange={(event) => setRbacUserId(event.target.value)}
+                          value={rbacUserId}
+                        >
+                          {workspace.rbac.users.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.displayName} · {user.email}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-sm text-[#5A5751]">
+                        <span className="mb-1 block text-xs uppercase tracking-[0.16em] text-[#A8A69F]">Role</span>
+                        <select
+                          className="w-full rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-sm text-[#2C2B29]"
+                          onChange={(event) => setRbacUserRoleCode(event.target.value)}
+                          value={rbacUserRoleCode}
+                        >
+                          {adminCreationRoles.map((role) => (
+                            <option key={role.code} value={role.code}>
+                              {role.name}{isProtectedRoleCode(role.code) ? ' · Protected role' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <button
+                      className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#5A7C96] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4D6C83] disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isSavingRbac || !onAssignRbacUserRole || !rbacUserId || !rbacUserRoleCode}
+                      type="submit"
+                    >
+                      {isSavingRbac ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      Assign Role
+                    </button>
+                    <div className="mt-4 rounded-lg border border-[#E6E4DD] bg-white p-3 text-xs text-[#8C8981]">
+                      Protected roles include ops_admin, super_admin, root, owner, system_admin, and bootstrap_admin.
+                      Normal staff, advocates, and billing staff cannot create users or assign roles.
+                    </div>
+                  </form>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {activeTab === 'roles' ? (
+            <div className="space-y-6">
+              <SectionHeader
+                description="Manage role definitions, grouped permissions, and protected role safeguards."
+                icon={Shield}
+                title="Roles & Permissions"
+              />
+              {!workspace.rbac.canManage ? (
+                <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-6 text-sm text-[#8C8981]">
+                  You do not have permission to manage roles. RBAC detail is restricted to authorized admins.
+                </div>
+              ) : (
+                <>
+                  {rbacError ? (
+                    <div className="rounded-xl border border-[#F1B8B8] bg-[#FFF5F5] p-4 text-sm text-[#9E3D3D]">
+                      {rbacError}
+                    </div>
+                  ) : null}
+                  {rbacMessage ? (
+                    <div className="rounded-xl border border-[#B8D8C2] bg-[#F4FBF5] p-4 text-sm text-[#337348]">
+                      {rbacMessage}
+                    </div>
+                  ) : null}
+                  <div className="rounded-xl border border-[#E6E4DD] bg-[#FFF7E6] p-4 text-sm text-[#6F5B21]">
+                    <strong className="font-semibold">Roles decide what modules a user can access.</strong>
+                    <span className="mt-1 block">
+                      Staff and counsel profiles are created in Team & Counsel. Admin login users are managed in Admin Users.
+                      Protected role attempts are enforced and audited by the server.
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 rounded-xl border border-[#E6E4DD] bg-white p-2">
+                    {[
+                      ['overview', 'Overview'],
+                      ['roles', 'Roles'],
+                      ['advanced', 'Advanced Permissions'],
+                    ].map(([tabId, label]) => (
+                      <RbacTabButton
+                        active={rbacActiveTab === tabId}
+                        key={tabId}
+                        label={label}
+                        onClick={() => setRbacActiveTab(tabId as RbacWorkspaceTab)}
+                      />
+                    ))}
+                  </div>
+
+                  {rbacActiveTab === 'overview' ? (
+                    <div className="space-y-5">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        <AccessSummaryCard
+                          actionLabel="Manage roles"
+                          count={rbacOverviewStats.roles}
+                          description="Roles decide which modules and actions a user can use."
+                          onAction={() => setRbacActiveTab('roles')}
+                          title="Roles"
+                        />
+                        <AccessSummaryCard
+                          actionLabel="Review protections"
+                          count={rbacOverviewStats.protectedRoles}
+                          description="High-power roles that only top-level admins can assign."
+                          onAction={() => setRbacActiveTab('advanced')}
+                          title="Protected Roles"
+                        />
+                        <AccessSummaryCard
+                          actionLabel="Review users"
+                          count={rbacOverviewStats.users}
+                          description="Admin login accounts are managed in the Admin Users settings tab."
+                          onAction={() => setActiveTab('adminUsers')}
+                          title="Admin Users"
+                        />
+                      </div>
+                      <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5">
+                        <h3 className="text-sm font-medium text-[#2C2B29]">Assignments and scoped access</h3>
+                        <p className="mt-2 text-sm leading-relaxed text-[#5A5751]">
+                          Roles decide what modules a user can use. Assignments decide which records they can see.
+                          Missing assignment never means global access.
+                          Create staff and counsel profiles in Team & Counsel first, then manage login enablement from
+                          the profile workflow when that focused flow is available.
+                        </p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <MetaPill label="No assignment = no matter/client access" tone="amber" />
+                          <MetaPill label="Assigned-only access" tone="blue" />
+                          <MetaPill label="Billing-only access" tone="green" />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {rbacActiveTab === 'roles' ? (
+                    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                      <div className="space-y-4">
                       <form className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5" onSubmit={submitRbacRole}>
                         <div className="mb-5 flex items-start justify-between gap-3">
                           <div>
@@ -4247,6 +5490,11 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                       <div className="space-y-3">
                         {workspace.rbac.roles.map((role) => {
                           const isSelected = selectedRoleCode === role.code;
+                          const moduleSummary =
+                            (rolePermissionSummaries.get(role.code) || [])
+                              .slice(0, 3)
+                              .map(([moduleName, count]) => `${moduleName}: ${count}`)
+                              .join(' · ') || 'No permissions assigned';
                           return (
                             <button
                               className={`w-full rounded-xl border p-4 text-left transition ${
@@ -4265,20 +5513,26 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                               <div className="flex items-start justify-between gap-3">
                                 <div>
                                   <p className="text-sm font-medium text-[#2C2B29]">{role.name}</p>
-                                  <p className="mt-1 text-xs text-[#8C8981]">{role.description || role.code}</p>
+                                  <p className="mt-1 text-xs text-[#8C8981]">{roleExplanation(role)}</p>
                                 </div>
                                 <div className="flex flex-col items-end gap-2">
                                   <MetaPill label={role.isActive ? 'Active' : 'Inactive'} tone={role.isActive ? 'green' : 'neutral'} />
-                                  <MetaPill label={role.isSystem ? 'System' : 'Custom'} tone={role.isSystem ? 'neutral' : 'blue'} />
+                                  <MetaPill label={isProtectedRoleCode(role.code) ? 'Protected role' : role.isSystem ? 'System' : 'Custom'} tone={isProtectedRoleCode(role.code) ? 'amber' : role.isSystem ? 'neutral' : 'blue'} />
                                 </div>
                               </div>
                               <div className="mt-4 grid grid-cols-2 gap-3">
                                 <InfoBlock label="Users" value={String(role.userCount)} />
                                 <InfoBlock label="Permissions" value={String(role.permissionCodes.length)} />
                               </div>
+                              <p className="mt-3 text-xs text-[#8C8981]">{moduleSummary}</p>
                             </button>
                           );
                         })}
+                        {workspace.rbac.roles.length === 0 ? (
+                          <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5 text-sm text-[#8C8981]">
+                            No roles found.
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
@@ -4291,6 +5545,9 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                               <p className="mt-1 text-xs text-[#8C8981]">{selectedRole.code}</p>
                             </div>
                             <div className="flex flex-wrap gap-2">
+                              {isProtectedRoleCode(selectedRole.code) ? (
+                                <MetaPill label="Protected role" tone="amber" />
+                              ) : null}
                               <button
                                 className="rounded-lg border border-[#E6E4DD] bg-white px-3 py-1.5 text-xs text-[#5A7C96] transition hover:bg-[#F4F1EA] disabled:cursor-not-allowed disabled:opacity-50"
                                 disabled={selectedRole.isSystem || isSavingRbac}
@@ -4315,124 +5572,113 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
                             </div>
                           ) : null}
                           <div className="mt-5 space-y-5">
-                            {permissionsByModule.map(([moduleName, permissions]) => (
-                              <div key={moduleName}>
-                                <h4 className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-[#A8A69F]">
-                                  {moduleName}
-                                </h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                  {permissions.map((permission) => (
-                                    <label
-                                      className="flex items-start gap-2 rounded-lg border border-[#E6E4DD] bg-white p-3 text-sm text-[#5A5751]"
-                                      key={permission.code}
-                                    >
-                                      <input
-                                        checked={selectedPermissionCodes.includes(permission.code)}
-                                        className="mt-0.5 h-4 w-4 rounded border-[#D8D3C8]"
-                                        disabled={selectedRole.isSystem}
-                                        onChange={() => togglePermissionCode(permission.code)}
-                                        type="checkbox"
-                                      />
-                                      <span>
-                                        <span className="block text-xs font-medium text-[#2C2B29]">
-                                          {permission.description || permission.code}
-                                        </span>
-                                        <span className="mt-1 block text-[11px] text-[#A8A69F]">{permission.code}</span>
-                                      </span>
-                                    </label>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
+                            {permissionsByModule.map(([moduleName, permissions]) => {
+                              const selectedInModule = permissions.filter((permission) =>
+                                selectedRole.permissionCodes.includes(permission.code)
+                              );
+                              return (
+                                <details
+                                  className="rounded-xl border border-[#E6E4DD] bg-white p-4"
+                                  key={moduleName}
+                                  open={selectedInModule.length > 0}
+                                >
+                                  <summary className="cursor-pointer text-sm font-medium text-[#2C2B29]">
+                                    {moduleName}
+                                    <span className="ml-2 text-xs font-normal text-[#8C8981]">
+                                      {selectedInModule.length} selected
+                                    </span>
+                                  </summary>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {selectedInModule.map((permission) => (
+                                      <MetaPill key={permission.code} label={permissionActionLabel(permission)} tone="blue" />
+                                    ))}
+                                    {selectedInModule.length === 0 ? (
+                                      <span className="text-xs text-[#A8A69F]">No permissions in this module.</span>
+                                    ) : null}
+                                  </div>
+                                </details>
+                              );
+                            })}
                           </div>
                           <button
-                            className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#5A7C96] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4D6C83] disabled:cursor-not-allowed disabled:opacity-60"
-                            disabled={selectedRole.isSystem || isSavingRbac || !onUpdateRbacRolePermissions}
-                            onClick={() => void saveRbacPermissions()}
+                            className="mt-5 rounded-lg border border-[#E6E4DD] bg-white px-4 py-2 text-sm font-medium text-[#5A7C96] transition hover:bg-[#F4F1EA]"
+                            onClick={() => setRbacActiveTab('advanced')}
                             type="button"
                           >
-                            {isSavingRbac ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                            Save Permissions
+                            Open advanced permission editor
                           </button>
                         </div>
                       ) : null}
-
-                      <form className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5" onSubmit={assignRbacRole}>
-                        <h3 className="text-sm font-medium text-[#2C2B29]">User Role Assignment</h3>
-                        <p className="mt-1 text-xs text-[#8C8981]">
-                          Assign active admin roles to staff users. Client portal roles are not managed here.
-                        </p>
-                        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <label className="text-sm text-[#5A5751]">
-                            <span className="mb-1 block text-xs uppercase tracking-[0.16em] text-[#A8A69F]">Admin user</span>
-                            <select
-                              className="w-full rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-sm text-[#2C2B29]"
-                              onChange={(event) => setRbacUserId(event.target.value)}
-                              value={rbacUserId}
-                            >
-                              {workspace.rbac.users.map((user) => (
-                                <option key={user.id} value={user.id}>
-                                  {user.displayName} · {user.email}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="text-sm text-[#5A5751]">
-                            <span className="mb-1 block text-xs uppercase tracking-[0.16em] text-[#A8A69F]">Role</span>
-                            <select
-                              className="w-full rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-sm text-[#2C2B29]"
-                              onChange={(event) => setRbacUserRoleCode(event.target.value)}
-                              value={rbacUserRoleCode}
-                            >
-                              {activeAssignableRoles.map((role) => (
-                                <option key={role.code} value={role.code}>
-                                  {role.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        <button
-                          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#5A7C96] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4D6C83] disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={isSavingRbac || !onAssignRbacUserRole || !rbacUserId || !rbacUserRoleCode}
-                          type="submit"
-                        >
-                          {isSavingRbac ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                          Assign Role
-                        </button>
-                        <div className="mt-5 space-y-3">
-                          {workspace.rbac.users.map((user) => (
-                            <div className="rounded-lg border border-[#E6E4DD] bg-white p-3" key={user.id}>
-                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                  <p className="text-sm font-medium text-[#2C2B29]">{user.displayName}</p>
-                                  <p className="mt-1 text-xs text-[#8C8981]">{user.email}</p>
-                                </div>
-                                <p className="text-xs text-[#8C8981]">{user.permissionCodes.length} permissions</p>
-                              </div>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {user.roleCodes.map((roleCode) => (
-                                  <button
-                                    className="rounded-full border border-[#E6E4DD] bg-[#FCFBF8] px-3 py-1 text-xs text-[#5A5751] transition hover:bg-[#F4F1EA] disabled:cursor-not-allowed disabled:opacity-50"
-                                    disabled={isSavingRbac || !onRemoveRbacUserRole}
-                                    key={roleCode}
-                                    onClick={() => void removeRbacRole(user.id, roleCode)}
-                                    title="Remove role"
-                                    type="button"
-                                  >
-                                    {roleCode} ×
-                                  </button>
-                                ))}
-                                {user.roleCodes.length === 0 ? (
-                                  <span className="text-xs text-[#A8A69F]">No active roles</span>
-                                ) : null}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </form>
                     </div>
                   </div>
+                  ) : null}
+
+                  {rbacActiveTab === 'advanced' ? (
+                    <div className="space-y-5">
+                      <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5">
+                        <h3 className="text-sm font-medium text-[#2C2B29]">Advanced Permissions</h3>
+                        <p className="mt-1 text-xs text-[#8C8981]">
+                          Full permission matrix is preserved here for advanced admins. Raw permission codes are shown for auditability.
+                        </p>
+                        {selectedRole ? (
+                          <>
+                            <div className="mt-4 flex flex-wrap items-center gap-2">
+                              <MetaPill label={selectedRole.name} tone="blue" />
+                              {selectedRole.isSystem ? <MetaPill label="System role" tone="neutral" /> : null}
+                              {isProtectedRoleCode(selectedRole.code) ? <MetaPill label="Protected role" tone="amber" /> : null}
+                            </div>
+                            <div className="mt-5 space-y-5">
+                              {permissionsByModule.map(([moduleName, permissions]) => (
+                                <details className="rounded-xl border border-[#E6E4DD] bg-white p-4" key={moduleName}>
+                                  <summary className="cursor-pointer text-sm font-medium text-[#2C2B29]">
+                                    {moduleName}
+                                  </summary>
+                                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                    {permissions.map((permission) => (
+                                      <label
+                                        className="flex items-start gap-2 rounded-lg border border-[#E6E4DD] bg-[#FCFBF8] p-3 text-sm text-[#5A5751]"
+                                        key={permission.code}
+                                      >
+                                        <input
+                                          checked={selectedPermissionCodes.includes(permission.code)}
+                                          className="mt-0.5 h-4 w-4 rounded border-[#D8D3C8]"
+                                          disabled={selectedRole.isSystem}
+                                          onChange={() => togglePermissionCode(permission.code)}
+                                          type="checkbox"
+                                        />
+                                        <span>
+                                          <span className="block text-xs font-medium text-[#2C2B29]">
+                                            {permissionActionLabel(permission)}
+                                          </span>
+                                          <span className="mt-1 block text-[11px] text-[#A8A69F]">{permission.code}</span>
+                                        </span>
+                                      </label>
+                                    ))}
+                                    {permissions.length === 0 ? (
+                                      <span className="text-xs text-[#A8A69F]">No permissions in this module.</span>
+                                    ) : null}
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                            <button
+                              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#5A7C96] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#4D6C83] disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={selectedRole.isSystem || isSavingRbac || !onUpdateRbacRolePermissions}
+                              onClick={() => void saveRbacPermissions()}
+                              type="button"
+                            >
+                              {isSavingRbac ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                              Save Permissions
+                            </button>
+                          </>
+                        ) : (
+                          <div className="mt-4 rounded-lg border border-[#E6E4DD] bg-white p-4 text-sm text-[#8C8981]">
+                            No roles found.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -4962,6 +6208,59 @@ export const SettingsWorkspace: React.FC<SettingsWorkspaceProps> = ({
     </div>
   );
 };
+
+const RbacTabButton = ({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) => (
+  <button
+    className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+      active ? 'bg-[#2C2B29] text-white' : 'text-[#5A5751] hover:bg-[#F4F1EA]'
+    }`}
+    onClick={onClick}
+    type="button"
+  >
+    {label}
+  </button>
+);
+
+const AccessSummaryCard = ({
+  actionLabel,
+  count,
+  description,
+  onAction,
+  title,
+}: {
+  actionLabel: string;
+  count: number;
+  description: string;
+  onAction: () => void;
+  title: string;
+}) => (
+  <div className="rounded-xl border border-[#E6E4DD] bg-[#FCFBF8] p-5">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-sm font-medium text-[#2C2B29]">{title}</p>
+        <p className="mt-1 text-xs leading-relaxed text-[#8C8981]">{description}</p>
+      </div>
+      <span className="rounded-full border border-[#D6E4EE] bg-[#EFF3F6] px-3 py-1 text-sm font-medium text-[#5A7C96]">
+        {count}
+      </span>
+    </div>
+    <button
+      className="mt-4 rounded-lg border border-[#E6E4DD] bg-white px-3 py-2 text-xs font-medium text-[#5A7C96] transition hover:bg-[#F4F1EA]"
+      onClick={onAction}
+      type="button"
+    >
+      {actionLabel}
+    </button>
+  </div>
+);
 
 const SectionHeader = ({
   description,

@@ -113,6 +113,9 @@ export const API_ENDPOINTS = {
       joinApiPath(
         `/v1/admin/settings/rbac/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`
       ),
+    settingsAdminUsers: () => joinApiPath('/v1/admin/settings/admin-users'),
+    settingsAdminUser: (userId: string) =>
+      joinApiPath(`/v1/admin/settings/admin-users/${encodeURIComponent(userId)}`),
     search: () => joinApiPath('/v1/admin/search'),
     invoiceSettings: () => joinApiPath('/v1/admin/settings/invoice'),
     invoicePdfTemplates: () => joinApiPath('/v1/admin/settings/invoice/pdf-templates'),
@@ -121,6 +124,11 @@ export const API_ENDPOINTS = {
     invoicePdfTemplateArchive: (templateId: string) =>
       joinApiPath(`/v1/admin/settings/invoice/pdf-templates/${encodeURIComponent(templateId)}/archive`),
     serviceCatalog: () => joinApiPath('/v1/admin/settings/service-catalog'),
+    serviceCatalogDomains: () => joinApiPath('/v1/admin/settings/service-catalog/domains'),
+    serviceCatalogDomain: (domainCode: string) =>
+      joinApiPath(`/v1/admin/settings/service-catalog/domains/${encodeURIComponent(domainCode)}`),
+    serviceCatalogDomainArchive: (domainCode: string) =>
+      joinApiPath(`/v1/admin/settings/service-catalog/domains/${encodeURIComponent(domainCode)}/archive`),
     serviceCatalogServices: () => joinApiPath('/v1/admin/settings/service-catalog/services'),
     serviceCatalogService: (serviceId: string) =>
       joinApiPath(`/v1/admin/settings/service-catalog/services/${serviceId}`),
@@ -183,6 +191,10 @@ export const API_ENDPOINTS = {
       joinApiPath(`/v1/admin/settings/team/members/${memberId}`),
     settingsTeamMemberArchive: (memberId: string) =>
       joinApiPath(`/v1/admin/settings/team/members/${memberId}/archive`),
+    settingsTeamMemberEnableLogin: (memberId: string) =>
+      joinApiPath(`/v1/admin/settings/team/members/${encodeURIComponent(memberId)}/enable-login`),
+    settingsTeamMemberLogin: (memberId: string) =>
+      joinApiPath(`/v1/admin/settings/team/members/${encodeURIComponent(memberId)}/login`),
     settingsWorkspace: () => joinApiPath('/v1/admin/settings/workspace'),
     tasksWorkspace: () => joinApiPath('/v1/admin/tasks/workspace'),
     uploadDocument: () => joinApiPath('/v1/admin/documents/uploads'),

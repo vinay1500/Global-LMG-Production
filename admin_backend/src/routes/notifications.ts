@@ -9,8 +9,8 @@ export const notificationsRouter = Router();
 notificationsRouter.get(
   '/notifications',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'notification.view');
-    response.json(await listNotifications(parsePaginationQuery(request.query)));
+    const actor = await requireReadPermission(request, 'notification.view');
+    response.json(await listNotifications(actor, parsePaginationQuery(request.query)));
   })
 );
 

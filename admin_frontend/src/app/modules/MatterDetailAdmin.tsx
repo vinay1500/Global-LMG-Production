@@ -44,7 +44,7 @@ interface MatterDetailAdminProps {
   isPackageLoading?: boolean;
   packageErrorMessage?: string | null;
   packageWorkspace?: MatterPackageProposalsResponse | null;
-  serviceOptions?: Array<{ code: string; domainName?: string; name: string }>;
+  serviceOptions?: Array<{ code: string; name: string }>;
   onAddMatterNote?: (payload: { bodyText: string; title: string; visibleToClient?: boolean }) => Promise<void>;
   onArchiveProposal?: (proposalVersion: number) => Promise<void>;
   onAssignMatter?: (payload: {
@@ -101,7 +101,7 @@ interface MatterDetailAdminProps {
     documentId: string,
     payload: { reviewState: 'reviewed' | 'unreviewed'; visibility: 'client' | 'internal' }
   ) => Promise<void>;
-  onUpdateFee: (matterId: string, newFee: number) => Promise<void> | void;
+  onUpdateFee?: (matterId: string, newFee: number) => Promise<void> | void;
   onUploadDocument?: (payload: {
     file: File;
     reviewState: 'reviewed' | 'unreviewed';
@@ -512,6 +512,11 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
   };
 
   const handleSaveFee = async () => {
+    if (!onUpdateFee) {
+      setIsEditingFee(false);
+      return;
+    }
+
     const fee = parseInt(editedFee.replace(/,/g, '')) || 0;
     await onUpdateFee(matter.id, fee);
     setMatter({ ...matter, totalFee: fee });
@@ -712,13 +717,26 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
     packageWorkspace?.active?.packages.find((pkg) => pkg.isSelected) ||
     packageWorkspace?.history.flatMap((proposal) => proposal.packages).find((pkg) => pkg.isSelected) ||
     null;
-  const selectedPackageVersion =
+	  const selectedPackageVersion =
     packageWorkspace?.active?.packages.some((pkg) => pkg.isSelected)
       ? packageWorkspace.active.proposalVersion
       : packageWorkspace?.history.find((proposal) => proposal.packages.some((pkg) => pkg.isSelected))
           ?.proposalVersion;
-  const linkedPackageInvoice =
-    packageWorkspace?.linkedInvoiceSummary || packageWorkspace?.active?.linkedInvoice || null;
+	  const linkedPackageInvoice =
+	    packageWorkspace?.linkedInvoiceSummary || packageWorkspace?.active?.linkedInvoice || null;
+  const canEditMatter = Boolean(
+    onAddMatterNote ||
+      onReplaceMatterAssignments ||
+      onSaveMatterDetails ||
+      onUpdateFee ||
+      onUpdateStage
+  );
+  const canManagePackages = Boolean(
+    onArchiveProposal ||
+      onOverridePackageSelection ||
+      onPublishProposal ||
+      onSavePackageDraft
+  );
 
   return (
     <div className="max-w-full min-w-0 space-y-6 overflow-x-hidden">
@@ -740,12 +758,12 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
               <span>External contact: <span className="font-medium text-gray-900">{matter.assignedCounsel || 'Unassigned'}</span></span>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <select 
-                className={`bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded-full px-3 py-1 outline-none appearance-none capitalize ${isEditingMatter ? 'cursor-pointer hover:border-gray-300' : 'opacity-80 cursor-default'}`}
-                value={matter.operationalStatus}
-                onChange={(e) => setMatter({...matter, operationalStatus: e.target.value as any})}
-                disabled={!isEditingMatter}
-              >
+	              <select
+	                className={`bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded-full px-3 py-1 outline-none appearance-none capitalize ${isEditingMatter ? 'cursor-pointer hover:border-gray-300' : 'opacity-80 cursor-default'}`}
+	                value={matter.operationalStatus}
+	                onChange={(e) => setMatter({...matter, operationalStatus: e.target.value as any})}
+	                disabled={!isEditingMatter || !onSaveMatterDetails}
+	              >
                 {[
                   'new-lead', 'awaiting-verification', 'verification-scheduled',
                   'consultation-completed', 'fee-pending', 'package-ready',
@@ -756,12 +774,12 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                 ))}
               </select>
 
-              <select 
-                className={`bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded-full px-3 py-1 outline-none appearance-none capitalize ${isEditingMatter ? 'cursor-pointer hover:border-gray-300' : 'opacity-80 cursor-default'}`}
-                value={matter.priority}
-                onChange={(e) => setMatter({...matter, priority: e.target.value as any})}
-                disabled={!isEditingMatter}
-              >
+	              <select
+	                className={`bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded-full px-3 py-1 outline-none appearance-none capitalize ${isEditingMatter ? 'cursor-pointer hover:border-gray-300' : 'opacity-80 cursor-default'}`}
+	                value={matter.priority}
+	                onChange={(e) => setMatter({...matter, priority: e.target.value as any})}
+	                disabled={!isEditingMatter || !onSaveMatterDetails}
+	              >
                 {[
                   'in-progress', 'immediate-6h', 'awaiting-client', 'awaiting-team', 'completed', 'on-hold'
                 ].map(priority => (
@@ -786,19 +804,19 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
             <button onClick={() => onChat(myThreads.find(t => t.matterId === matter.id)?.id || null)} className="px-4 py-2 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition">
               <MessageSquare className="w-4 h-4" /> Open Chat
             </button>
-            {isEditingMatter ? (
-              <button
+	            {isEditingMatter ? (
+	              <button
                 onClick={() => void handleSaveMatter()}
                 className="px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 flex items-center gap-2 transition disabled:opacity-50"
                 disabled={isSavingMatter}
               >
                 <Save className="w-4 h-4" /> Save Changes
-              </button>
-            ) : (
-              <button onClick={() => setIsEditingMatter(true)} className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 flex items-center gap-2 transition">
-                <Edit2 className="w-4 h-4" /> Edit Matter
-              </button>
-            )}
+	              </button>
+	            ) : canEditMatter ? (
+	              <button onClick={() => setIsEditingMatter(true)} className="px-4 py-2 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-800 flex items-center gap-2 transition">
+	                <Edit2 className="w-4 h-4" /> Edit Matter
+	              </button>
+	            ) : null}
           </div>
         </div>
 
@@ -807,7 +825,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Lifecycle Stage</h3>
             <div className="relative">
-              {isEditingMatter && (
+	              {isEditingMatter && onUpdateStage && (
                 <button 
                   onClick={() => setShowStageDropdown(!showStageDropdown)} 
                   className="text-xs text-blue-600 hover:underline"
@@ -854,8 +872,9 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
           <div className="min-w-0 space-y-8">
             {activeTab === 'overview' && (
               <>
-                {/* Package Builder Section */}
-                <div className="border-t border-gray-100 pt-6">
+	                {/* Package Builder Section */}
+	                {canManagePackages || packageWorkspace ? (
+	                <div className="border-t border-gray-100 pt-6">
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <h3 className="flex min-w-0 items-center gap-2 text-lg font-medium" style={{ fontFamily: "'Playfair Display', serif" }}>
                       <Package className="w-5 h-5 text-gray-400" />
@@ -927,26 +946,28 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                         </div>
                       </div>
 
-                      <PackageBuilder
-                        existingPackages={editorPackages}
-                        isSaving={isSavingPackageDraft}
-                        matterId={matter.id}
-                        onSave={(packages) => void handleSavePackages(packages)}
-                        saveLabel={packageWorkspace?.draft ? 'Update Draft' : 'Save Draft'}
-                      />
+	                      {onSavePackageDraft ? (
+	                        <PackageBuilder
+	                          existingPackages={editorPackages}
+	                          isSaving={isSavingPackageDraft}
+	                          matterId={matter.id}
+	                          onSave={(packages) => void handleSavePackages(packages)}
+	                          saveLabel={packageWorkspace?.draft ? 'Update Draft' : 'Save Draft'}
+	                        />
+	                      ) : null}
 
-                      {packageWorkspace?.active ? (
-                        <div className="min-w-0 space-y-4 rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="min-w-0">
-                              <h4 className="text-base font-medium text-gray-900">Client-Facing Proposal</h4>
-                              <p className="text-sm text-gray-500">
-                                Version {packageWorkspace.active.proposalVersion} · {packageWorkspace.active.status}
-                              </p>
-                            </div>
-                            {packageWorkspace.active.linkedInvoice ? (
-                              <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-emerald-700">
-                                Invoice {packageWorkspace.active.linkedInvoice.invoiceNumber}
+	                      {packageWorkspace?.active ? (
+	                        <div className="min-w-0 space-y-4 rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
+	                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+	                            <div className="min-w-0">
+	                              <h4 className="text-base font-medium text-gray-900">Client-Facing Proposal</h4>
+	                              <p className="text-sm text-gray-500">
+	                                Version {packageWorkspace.active.proposalVersion} · {packageWorkspace.active.status}
+	                              </p>
+	                            </div>
+	                            {packageWorkspace.active.linkedInvoice ? (
+	                              <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-emerald-700">
+	                                Invoice {packageWorkspace.active.linkedInvoice.invoiceNumber}
                               </span>
                             ) : (
                               <span className="rounded-full bg-indigo-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-indigo-700">
@@ -1050,15 +1071,16 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                         </div>
                       ) : null}
                     </div>
-                  )}
-                </div>
+	                  )}
+	                </div>
+	                ) : null}
 
-            {/* Matter Details */}
+	            {/* Matter Details */}
             <div className="space-y-6">
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm text-gray-500 font-medium">Issue Summary</h3>
-                  {isEditingSummary ? (
+	                  {isEditingSummary ? (
                     <button
                       onClick={() => {
                         void (async () => {
@@ -1071,7 +1093,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                     >
                       Save Summary
                     </button>
-                  ) : isEditingMatter && (
+	                  ) : isEditingMatter && onSaveMatterDetails && (
                     <button onClick={() => setIsEditingSummary(true)} className="text-xs text-blue-600 hover:underline">Edit Summary</button>
                   )}
                 </div>
@@ -1102,7 +1124,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                     >
                       Save Services
                     </button>
-                  ) : isEditingMatter && (
+	                  ) : isEditingMatter && onSaveMatterDetails && (
                     <button onClick={() => setIsEditingServices(true)} className="text-xs text-blue-600 hover:underline">Edit Services</button>
                   )}
                 </div>
@@ -1111,7 +1133,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2">
                     {(serviceOptions.length
                       ? serviceOptions
-                      : matter.selectedServices.map((code) => ({ code, domainName: undefined, name: getServiceName(code) }))
+                      : matter.selectedServices.map((code) => ({ code, name: getServiceName(code) }))
                     ).map(s => (
                       <label key={s.code} className="flex items-center gap-2 cursor-pointer">
                         <input 
@@ -1125,7 +1147,6 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                         />
                         <span className="text-sm text-gray-700">
                           {s.name}
-                          {s.domainName ? <span className="ml-1 text-xs text-gray-400">({s.domainName})</span> : null}
                         </span>
                       </label>
                     ))}
@@ -1142,7 +1163,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm text-gray-500 font-medium">Client-Visible Updates</h3>
-                  {isEditingMatter && (
+	                  {isEditingMatter && onAddMatterNote && (
                     <button
                       className="text-xs text-blue-600 hover:underline"
                       onClick={() => {
@@ -1184,7 +1205,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm text-gray-500 font-medium">Internal Notes</h3>
-                  {isEditingMatter && (
+	                  {isEditingMatter && onAddMatterNote && (
                     <button
                       className="text-xs text-blue-600 hover:underline"
                       onClick={() => {
@@ -1233,9 +1254,11 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                     <h3 className="text-lg font-medium" style={{ fontFamily: "'Playfair Display', serif" }}>Events & Meetings</h3>
                     <p className="text-sm text-gray-500">Manage case deadlines, hearings, and Google Meet calls.</p>
                   </div>
-                  <button onClick={() => setShowEventForm(true)} className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-800 transition">
-                    + Add Event/Meeting
-                  </button>
+	                  {onCreateEvent ? (
+	                    <button onClick={() => setShowEventForm(true)} className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-800 transition">
+	                      + Add Event/Meeting
+	                    </button>
+	                  ) : null}
                 </div>
 
                 {showEventForm && (
@@ -1457,11 +1480,11 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
               <div className="absolute top-0 left-0 w-full h-1 bg-gray-900" />
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Fee & Billing Summary</h3>
-                {isEditingFee ? (
-                  <button onClick={handleSaveFee} className="text-emerald-600 hover:text-emerald-700 p-1"><Save className="w-4 h-4"/></button>
-                ) : (
-                  <button onClick={() => setIsEditingFee(true)} className="text-gray-400 hover:text-gray-900 p-1"><Edit2 className="w-3.5 h-3.5"/></button>
-                )}
+	                  {isEditingFee ? (
+	                  <button onClick={handleSaveFee} className="text-emerald-600 hover:text-emerald-700 p-1"><Save className="w-4 h-4"/></button>
+	                ) : onUpdateFee ? (
+	                  <button onClick={() => setIsEditingFee(true)} className="text-gray-400 hover:text-gray-900 p-1"><Edit2 className="w-3.5 h-3.5"/></button>
+	                ) : null}
               </div>
               
               <div className="space-y-3 text-sm">
@@ -1539,7 +1562,7 @@ export const MatterDetailAdmin: React.FC<MatterDetailAdminProps> = ({
                   No coordination staff, external counsel, or field partners assigned.
                 </div>
               )}
-              {isEditingMatter && assignmentOptions ? (
+	              {isEditingMatter && assignmentOptions && onReplaceMatterAssignments ? (
                 <div className="pt-3 border-t border-gray-200 space-y-3">
                   <AssignmentMultiSelect
                     draft={assignmentDraft.staff}

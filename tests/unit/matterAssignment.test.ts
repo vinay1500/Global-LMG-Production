@@ -85,8 +85,8 @@ describe('matter assignment fee validation', () => {
     );
   });
 
-  it('preserves optional fee-field behavior when fee amounts are omitted', () => {
-    expectAssignmentValid(unassignedAssignment);
+  it('rejects assignments without an assignee even when fee amounts are omitted', () => {
+    expectAssignmentInvalid(unassignedAssignment, 'Select exactly one assignee for this assignment.');
   });
 
   it('accepts assignment fees for an internal user assignee', () => {
@@ -114,16 +114,23 @@ describe('matter assignment fee validation', () => {
         ...unassignedAssignment,
         feeAgreedAmount: 100,
       },
-      'Select an assignee before adding assignment fees.'
+      'Select exactly one assignee for this assignment.'
     );
   });
 
-  it('preserves zero-fee unassigned assignment schema behavior', () => {
-    expectAssignmentValid({
+  it('rejects zero-fee unassigned assignments', () => {
+    expectAssignmentInvalid({
       ...unassignedAssignment,
       feeAgreedAmount: 0,
       feePaidAmount: 0,
       feeDueAmount: 0,
-    });
+    }, 'Select exactly one assignee for this assignment.');
+  });
+
+  it('rejects malformed assignment rows with both assignee types', () => {
+    expectAssignmentInvalid({
+      ...baseAssignment,
+      internalUserId: 'internal_user_test',
+    }, 'Choose either internal staff or counsel, not both.');
   });
 });

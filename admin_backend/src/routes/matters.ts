@@ -20,7 +20,12 @@ import {
   saveDraftProposal,
 } from '../modules/packages/service.js';
 import { parseOptionalSearchQuery, parsePaginationQuery } from './queryValidation.js';
-import { requireMutationPermission, requireReadPermission } from './shared.js';
+import {
+  requireAnyMutationPermission,
+  requireAnyReadPermission,
+  requireMutationPermission,
+  requireReadPermission,
+} from './shared.js';
 
 export const mattersRouter = Router();
 
@@ -52,17 +57,22 @@ export const assignmentSchema = z
     visibleToClient: z.boolean().optional(),
   })
   .superRefine((payload, context) => {
-    const hasAssignee = Boolean(payload.internalUserId || payload.counselPartnerId);
-    const hasFee =
-      (payload.feeAgreedAmount ?? 0) > 0 ||
-      (payload.feePaidAmount ?? 0) > 0 ||
-      (payload.feeDueAmount ?? 0) > 0;
+    const hasInternalAssignee = Boolean(payload.internalUserId);
+    const hasCounselAssignee = Boolean(payload.counselPartnerId);
 
-    if (!hasAssignee && hasFee) {
+    if (!hasInternalAssignee && !hasCounselAssignee) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Select an assignee before adding assignment fees.',
+        message: 'Select exactly one assignee for this assignment.',
         path: ['internalUserId'],
+      });
+    }
+
+    if (hasInternalAssignee && hasCounselAssignee) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Choose either internal staff or counsel, not both.',
+        path: ['counselPartnerId'],
       });
     }
 
@@ -172,9 +182,9 @@ const packageOverrideSchema = z.object({
 mattersRouter.get(
   '/matters',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'matter.view');
+    const actor = await requireAnyReadPermission(request, ['matter.view', 'matter.view_assigned']);
     response.json(
-      await listMatters({
+      await listMatters(actor, {
         ...parsePaginationQuery(request.query),
         search: parseOptionalSearchQuery(request.query.search),
       })
@@ -202,8 +212,8 @@ mattersRouter.post(
 mattersRouter.get(
   '/matters/:matterId',
   asyncHandler(async (request, response) => {
-    await requireReadPermission(request, 'matter.view');
-    response.json(await getMatterWorkspace(String(request.params.matterId || '')));
+    const actor = await requireAnyReadPermission(request, ['matter.view', 'matter.view_assigned']);
+    response.json(await getMatterWorkspace(actor, String(request.params.matterId || '')));
   })
 );
 
@@ -218,7 +228,10 @@ mattersRouter.get(
 mattersRouter.patch(
   '/matters/:matterId',
   asyncHandler(async (request, response) => {
-    const actor = await requireMutationPermission(request, 'matter.update');
+    const actor = await requireAnyMutationPermission(request, [
+      'matter.update',
+      'matter.update_assigned',
+    ]);
     response.json(
       await updateMatterDetails(
         actor,
@@ -232,7 +245,10 @@ mattersRouter.patch(
 mattersRouter.patch(
   '/matters/:matterId/stage',
   asyncHandler(async (request, response) => {
-    const actor = await requireMutationPermission(request, 'matter.update');
+    const actor = await requireAnyMutationPermission(request, [
+      'matter.update',
+      'matter.update_assigned',
+    ]);
     response.json(
       await updateMatterStage(
         actor,
@@ -288,7 +304,10 @@ mattersRouter.post(
 mattersRouter.post(
   '/matters/:matterId/notes',
   asyncHandler(async (request, response) => {
-    const actor = await requireMutationPermission(request, 'matter.update');
+    const actor = await requireAnyMutationPermission(request, [
+      'matter.update',
+      'matter.update_assigned',
+    ]);
     response.status(201).json(
       await addMatterNote(
         actor,

@@ -119,7 +119,11 @@ describe('network hardening helpers', () => {
       'admin_backend/src/routes/requests.ts',
     ]) {
       const source = read(routeFile);
-      const authorizationIndex = source.indexOf('await requireReadPermission');
+      const authorizationIndexes = [
+        source.indexOf('await requireReadPermission'),
+        source.indexOf('await requireAnyReadPermission'),
+      ].filter((index) => index >= 0);
+      const authorizationIndex = authorizationIndexes.length ? Math.min(...authorizationIndexes) : -1;
       expect(authorizationIndex).toBeGreaterThanOrEqual(0);
       expect(source.indexOf('sendPrivateJsonWithEtag', authorizationIndex)).toBeGreaterThan(authorizationIndex);
     }

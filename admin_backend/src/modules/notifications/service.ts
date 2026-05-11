@@ -110,11 +110,28 @@ const assertCanMutateNotification = (
   );
 };
 
-export const listNotifications = async (options: { limit?: number; offset?: number } = {}) => {
+const notificationListScope = (actor: AdminActor) => {
+  if (actor.permissionCodes.includes('notification.manage')) {
+    return { params: [] as unknown[], sql: '' };
+  }
+
+  return {
+    params: [actor.userId] as unknown[],
+    sql: 'WHERE n.recipient_user_id = ?',
+  };
+};
+
+export const listNotifications = async (
+  actor: AdminActor,
+  options: { limit?: number; offset?: number } = {}
+) => {
   const pagination = normalizePagination(options);
+  const scope = notificationListScope(actor);
   const totalRows = await queryRows<RowDataPacket & { total: number }>(
     `SELECT COUNT(*) AS total
-     FROM notifications`
+     FROM notifications n
+     ${scope.sql}`,
+    scope.params
   );
   const rows = await queryRows<NotificationRow>(
     `SELECT
@@ -159,9 +176,10 @@ export const listNotifications = async (options: { limit?: number; offset?: numb
      LEFT JOIN matter_documents md ON md.document_id = doc.id
      LEFT JOIN matters doc_matter ON doc_matter.id = md.matter_id
      LEFT JOIN client_accounts document_client ON document_client.id = doc.owner_client_account_id
+     ${scope.sql}
      ORDER BY n.created_at DESC
      LIMIT ? OFFSET ?`,
-    [pagination.limit, pagination.offset]
+    [...scope.params, pagination.limit, pagination.offset]
   );
 
   return {

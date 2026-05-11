@@ -1,11 +1,17 @@
 import type { RowDataPacket } from 'mysql2/promise';
 import type { AdminActor } from '../auth/service.js';
+import {
+  assertCanAccessDocument,
+  getAssignedRecordScopeFilters,
+  hasAdminPermission,
+} from '../access/scope.js';
 import { executeStatement, queryRows, withTransaction } from '../../lib/mysql.js';
 import {
   buildPaginationMeta,
   countDocuments,
   fetchDocuments,
   fetchMatters,
+  getAdminResponseVisibility,
   normalizePagination,
 } from '../shared.js';
 import { createAuditEvent, createClientNotifications, resolveDocumentByPublicId } from '../writeSupport.js';
@@ -79,6 +85,7 @@ type DocumentFileRow = RowDataPacket & {
   mimeType: string;
   originalFileName: string;
   storagePath: string;
+  visibilityScope: string;
   virusStatus: string;
 };
 
@@ -96,8 +103,16 @@ type ActiveDocumentTypeRow = RowDataPacket & {
 
 const storageDriver = getDocumentStorage();
 
-export const listDocuments = async (options: { limit?: number; offset?: number } = {}) => {
+export const listDocuments = async (
+  actor: AdminActor,
+  options: { limit?: number; offset?: number } = {}
+) => {
   const pagination = normalizePagination(options);
+  const scopeFilters = await getAssignedRecordScopeFilters(actor, {
+    assignedPermission: 'document.view_assigned',
+    fullPermission: 'document.view',
+    includeMatters: true,
+  });
   const documentTypeRows = await queryRows<
     RowDataPacket & {
       allowedExtensionsJson: unknown;
@@ -131,7 +146,12 @@ export const listDocuments = async (options: { limit?: number; offset?: number }
   );
 
   return {
-    documents: await fetchDocuments({ limit: pagination.limit, offset: pagination.offset }),
+    documents: await fetchDocuments({
+      actor,
+      limit: pagination.limit,
+      matterDbIds: scopeFilters.matterDbIds,
+      offset: pagination.offset,
+    }),
     documentTypes: documentTypeRows.map((row) => ({
       allowedExtensions: parseJsonStringArray(row.allowedExtensionsJson),
       category: row.category,
@@ -145,8 +165,11 @@ export const listDocuments = async (options: { limit?: number; offset?: number }
       name: row.name,
       requiresReview: Boolean(row.requiresReview),
     })),
-    matters: await fetchMatters({ limit: 250 }),
-    pagination: buildPaginationMeta(pagination, await countDocuments({})),
+    matters: await fetchMatters({ actor, limit: 250, matterDbIds: scopeFilters.matterDbIds }),
+    pagination: buildPaginationMeta(
+      pagination,
+      await countDocuments({ actor, matterDbIds: scopeFilters.matterDbIds })
+    ),
   };
 };
 
@@ -838,7 +861,12 @@ export const uploadAdminDocumentVersion = async (
   };
 };
 
-export const getDocumentDetail = async (documentId: string) => {
+export const getDocumentDetail = async (actor: AdminActor, documentId: string) => {
+  if (!hasAdminPermission(actor, 'document.view')) {
+    await assertCanAccessDocument(actor, documentId);
+  }
+  const visibility = getAdminResponseVisibility(actor);
+
   const detailRows = await queryRows<DocumentDetailRow>(
     `SELECT
        d.id AS documentDbId,
@@ -860,6 +888,9 @@ export const getDocumentDetail = async (documentId: string) => {
 
   if (!detail) {
     throw notFound('document_not_found', 'Document not found.');
+  }
+  if (!visibility.allowInternal && visibilityToUi(detail.visibilityScope) === 'internal') {
+    throw forbidden('document_scope_forbidden', 'You do not have access to this document.');
   }
 
   const versionRows = await queryRows<DocumentVersionRow>(
@@ -906,6 +937,11 @@ export const getAdminDocumentFile = async (
   mode: 'download' | 'preview'
 ) =>
   withTransaction(async (connection) => {
+    const fullPermission = mode === 'download' ? 'document.download' : 'document.view';
+    if (!hasAdminPermission(actor, fullPermission)) {
+      await assertCanAccessDocument(actor, documentId, connection);
+    }
+
     const rows = await queryRows<DocumentFileRow>(
       `SELECT
          d.id AS documentDbId,
@@ -913,6 +949,7 @@ export const getAdminDocumentFile = async (
          dv.storage_path AS storagePath,
          dv.mime_type AS mimeType,
          dv.original_file_name AS originalFileName,
+         d.visibility_scope_code AS visibilityScope,
          dv.virus_scan_status_code AS virusStatus
        FROM documents d
        INNER JOIN document_versions dv ON dv.document_id = d.id AND dv.is_current = 1
@@ -926,6 +963,9 @@ export const getAdminDocumentFile = async (
 
     if (!document) {
       throw notFound('document_not_found', 'Document not found.');
+    }
+    if (!getAdminResponseVisibility(actor).allowInternal && visibilityToUi(document.visibilityScope) === 'internal') {
+      throw forbidden('document_scope_forbidden', 'You do not have access to this document.');
     }
 
     if (isScanBlocked(document.virusStatus, mode)) {

@@ -10,6 +10,7 @@ import { EmptyState } from './EmptyState';
 import type { CreateMatterPayload, CreateMatterResponse, MatterCreateOptions } from '../lib/api/contracts';
 
 interface MatterDeskAdminProps {
+  assignedScope?: boolean;
   clients?: PlatformUser[];
   createOptions?: MatterCreateOptions;
   createRequested?: boolean;
@@ -31,6 +32,7 @@ type FilterState = {
 };
 
 export const MatterDeskAdmin: React.FC<MatterDeskAdminProps> = ({
+  assignedScope = false,
   matters,
   clients: providedClients,
   createOptions,
@@ -398,9 +400,11 @@ export const MatterDeskAdmin: React.FC<MatterDeskAdminProps> = ({
                     <td colSpan={6} className="p-12">
                       <EmptyState 
                         icon={Briefcase} 
-                        title="No matters yet" 
+                        title={assignedScope ? 'No assigned matters yet.' : 'No matters yet'}
                         description={
-                          canCreateMatter
+                          assignedScope
+                            ? 'Assigned matters will appear here once an ops admin links you to a matter.'
+                            : canCreateMatter
                             ? 'Create the first matter from the New Matter action above.'
                             : 'Create an active client before opening the first matter.'
                         }
@@ -628,9 +632,6 @@ export const MatterDeskAdmin: React.FC<MatterDeskAdminProps> = ({
                         />
                         <span>
                           {service.name}
-                          {service.domainName ? (
-                            <span className="ml-1 text-xs text-[#A8A69F]">({service.domainName})</span>
-                          ) : null}
                         </span>
                       </label>
                     );

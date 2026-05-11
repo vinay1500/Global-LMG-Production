@@ -20,6 +20,11 @@ ADMIN_BOOTSTRAP_FORCE_ROTATION=true
 ADMIN_BOOTSTRAP_RESET_PASSWORD=false
 ```
 
+Use `ops_admin` for the first production admin. `ADMIN_BOOTSTRAP_ROLE` only
+supports `ops_admin`; scoped, operational, billing, client, and custom roles are
+not bootstrap-safe. Provision all other roles through the normal in-app admin
+workflows after the first admin exists.
+
 Run:
 
 ```bash

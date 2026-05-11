@@ -97,6 +97,11 @@ Admin bootstrap variables:
 - `ADMIN_BOOTSTRAP_FORCE_ROTATION=true`
 - `ADMIN_BOOTSTRAP_RESET_PASSWORD=false`
 
+Use `ops_admin` for the first admin. Seeded operational roles also include
+`case_manager`, `billing_admin`, `billing_staff`, `case_staff`, and `advocate`,
+but restricted roles should be assigned through the admin provisioning flow
+after the first admin exists.
+
 Reminder processing:
 
 - `REMINDER_PROCESS_BATCH_SIZE=25`

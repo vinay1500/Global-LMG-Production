@@ -9,6 +9,7 @@ import { useAsyncResource } from '../../hooks/useAsyncResource';
 import { adminApi } from '../../lib/api/admin';
 import { MatterDetailAdmin } from '../../modules/MatterDetailAdmin';
 import type { PackageTier } from '../../modules/PackageBuilder';
+import { useAdminSession } from '../../providers/AdminSessionProvider';
 
 const toDraftPayload = (packages: PackageTier[]) => ({
   packages: packages.map((pkg, index) => ({
@@ -25,6 +26,11 @@ const toDraftPayload = (packages: PackageTier[]) => ({
 export const MatterDetailPage = () => {
   const navigate = useNavigate();
   const { matterId } = useParams();
+  const { currentUser } = useAdminSession();
+  const permissionCodes = currentUser?.permissionCodes || [];
+  const canManageMatter = permissionCodes.includes('matter.update');
+  const canManageDocuments = permissionCodes.includes('document.manage');
+  const canManageEvents = permissionCodes.includes('event.manage');
   const { data, errorMessage, isLoading, refresh } = useAsyncResource(
     () => adminApi.getMatterWorkspace(String(matterId || '')),
     [matterId]
@@ -37,8 +43,11 @@ export const MatterDetailPage = () => {
     refresh: refreshPackageWorkspace,
     setData: setPackageWorkspace,
   } = useAsyncResource(
-    () => adminApi.getMatterPackageProposals(String(matterId || '')),
-    [matterId]
+    () =>
+      canManageMatter
+        ? adminApi.getMatterPackageProposals(String(matterId || ''))
+        : Promise.resolve(null),
+    [canManageMatter, matterId]
   );
   const [packageWorkspaceState, setPackageWorkspaceState] =
     useState<MatterPackageProposalsResponse | null>(null);
@@ -116,7 +125,7 @@ export const MatterDetailPage = () => {
 
   return (
       <MatterDetailAdmin
-      assignmentOptions={workspaceSnapshot?.assignmentOptions}
+      assignmentOptions={canManageMatter ? workspaceSnapshot?.assignmentOptions : undefined}
       buildDocumentDownloadUrl={adminApi.buildDocumentDownloadUrl}
       buildDocumentPreviewUrl={adminApi.buildDocumentPreviewUrl}
       isPackageLoading={isPackageLoading}
@@ -128,24 +137,24 @@ export const MatterDetailPage = () => {
       packageErrorMessage={packageErrorMessage}
       packageWorkspace={packageWorkspace}
       serviceOptions={workspaceSnapshot?.createOptions?.services}
-      onAddMatterNote={async (payload) => {
+      onAddMatterNote={canManageMatter ? async (payload) => {
         await adminApi.createMatterNote(matter.id, payload);
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
-      onAssignMatter={async (payload) => {
+      } : undefined}
+      onAssignMatter={canManageMatter ? async (payload) => {
         await adminApi.createMatterAssignment(matter.id, payload);
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
-      onReplaceMatterAssignments={async (payload) => {
+      } : undefined}
+      onReplaceMatterAssignments={canManageMatter ? async (payload) => {
         await adminApi.replaceMatterAssignments(matter.id, payload);
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
+      } : undefined}
       onBack={() => navigate('/matters')}
       onChat={() => navigate('/messages')}
-      onCreateEvent={async (payload) => {
+      onCreateEvent={canManageEvents ? async (payload) => {
         await adminApi.createEvent({
           ...payload,
           clientAccountId: matter.clientId,
@@ -153,57 +162,57 @@ export const MatterDetailPage = () => {
         });
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
-      onArchiveProposal={async (proposalVersion) => {
+      } : undefined}
+      onArchiveProposal={canManageMatter ? async (proposalVersion) => {
         const nextPackageWorkspace = await adminApi.archiveMatterProposal(matter.id, proposalVersion);
         setPackageWorkspace(nextPackageWorkspace);
         setPackageWorkspaceState(nextPackageWorkspace);
-      }}
-      onOverridePackageSelection={async (matterPackageId, reasonText) => {
+      } : undefined}
+      onOverridePackageSelection={canManageMatter ? async (matterPackageId, reasonText) => {
         await adminApi.overrideMatterPackageSelection(matter.id, {
           matterPackageId,
           reasonText,
         });
         await refreshAll();
-      }}
-      onPublishProposal={async (proposalVersion) => {
+      } : undefined}
+      onPublishProposal={canManageMatter ? async (proposalVersion) => {
         await adminApi.publishMatterProposal(matter.id, {
           proposalVersion,
         });
         await refreshAll();
-      }}
-      onSaveMatterDetails={async (payload) => {
+      } : undefined}
+      onSaveMatterDetails={canManageMatter ? async (payload) => {
         await adminApi.updateMatterDetails(matter.id, payload);
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
-      onSavePackageDraft={async (packages) => {
+      } : undefined}
+      onSavePackageDraft={canManageMatter ? async (packages) => {
         const nextPackageWorkspace = await adminApi.saveMatterPackageDraft(matter.id, {
           ...toDraftPayload(packages),
           proposalVersion: packageWorkspace?.draft?.proposalVersion,
         });
         setPackageWorkspace(nextPackageWorkspace);
         setPackageWorkspaceState(nextPackageWorkspace);
-      }}
-      onUpdateFee={handleUpdateFee}
-      onUpdateDocumentControls={async (documentId, payload) => {
+      } : undefined}
+      onUpdateFee={canManageMatter ? handleUpdateFee : undefined}
+      onUpdateDocumentControls={canManageDocuments ? async (documentId, payload) => {
         await adminApi.updateDocumentControls(documentId, payload);
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
+      } : undefined}
       onUpdateStage={async (payload) => {
         await adminApi.updateMatterStage(matter.id, payload);
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
       }}
-      onUploadDocument={async (payload) => {
+      onUploadDocument={canManageDocuments ? async (payload) => {
         await adminApi.uploadDocument({
           ...payload,
           matterId: matter.id,
         });
         const nextWorkspace = await refresh();
         setWorkspace(nextWorkspace);
-      }}
+      } : undefined}
     />
   );
 };

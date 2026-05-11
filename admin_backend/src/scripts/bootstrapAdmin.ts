@@ -22,6 +22,8 @@ type RoleRow = RowDataPacket & {
   code: string;
 };
 
+const BOOTSTRAP_SAFE_ADMIN_ROLE_CODES = new Set(['ops_admin']);
+
 const requireBootstrapEnv = () => {
   if (env.APP_ENV === 'production' && !env.ADMIN_BOOTSTRAP_ENABLED) {
     throw new Error(
@@ -72,6 +74,12 @@ const getExistingUser = async (email: string) => {
 };
 
 const ensureRoleExists = async (roleCode: string) => {
+  if (!BOOTSTRAP_SAFE_ADMIN_ROLE_CODES.has(roleCode)) {
+    throw new Error(
+      `Admin bootstrap role "${roleCode}" is not bootstrap-safe. Use ops_admin for bootstrap and provision operational/scoped roles through the normal admin workflows.`
+    );
+  }
+
   const rows = await queryRows<RoleRow>(
     `SELECT code
      FROM roles
@@ -111,7 +119,7 @@ const bootstrapAdmin = async () => {
            last_login_at, email_verified_at, phone_verified_at, created_at, updated_at,
            archived_at, row_version
          ) VALUES (
-           ?, ?, NULL, ?, ?, ?, 'staff', 'active', 'UTC', 'en-US',
+           ?, ?, NULL, ?, ?, ?, 'admin', 'active', 'UTC', 'en-US',
            NULL, 1, NULL, UTC_TIMESTAMP(6), NULL, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6),
            NULL, 1
          )`,
@@ -127,7 +135,7 @@ const bootstrapAdmin = async () => {
          SET display_name = ?,
              first_name = ?,
              last_name = ?,
-             actor_type_code = 'staff',
+             actor_type_code = 'admin',
              account_status_code = 'active',
              login_enabled = 1,
              email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP(6)),

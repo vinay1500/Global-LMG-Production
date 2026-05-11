@@ -5,12 +5,14 @@ import { getWorkspace } from '../modules/settings/service.js';
 import {
   archiveConsultationMode,
   archiveCountryPricing,
+  archiveServiceDomain,
   archivePriceOverride,
   archivePricingSlab,
   archiveService,
   archiveUrgencyRule,
   createConsultationMode,
   createCountryPricing,
+  createServiceDomain,
   createPriceOverride,
   createPricingSlab,
   createService,
@@ -19,6 +21,7 @@ import {
   getServiceCatalog,
   updateConsultationMode,
   updateCountryPricing,
+  updateServiceDomain,
   updatePriceOverride,
   updatePricingSlab,
   updateService,
@@ -42,9 +45,12 @@ import { getPlatformSettings, updatePlatformSetting } from '../modules/settings/
 import {
   archiveTeamMember,
   createTeamMember,
+  enableTeamMemberLogin,
   getTeamRegistry,
+  updateTeamMemberLogin,
   updateTeamMember,
 } from '../modules/settings/teamRegistry.js';
+import { createAdminUser, updateAdminUser } from '../modules/settings/adminUsers.js';
 import {
   archiveRole,
   assignUserRole,
@@ -125,7 +131,6 @@ const serviceCreateSchema = z.object({
   baseFee: z.number().min(0).optional(),
   code: z.string().trim().max(64).optional(),
   description: z.string().trim().max(2000).nullable().optional(),
-  domainCode: z.string().trim().max(64).nullable().optional(),
   icon: z.string().trim().max(64).nullable().optional(),
   isActive: z.boolean().optional(),
   name: z.string().trim().min(2).max(180),
@@ -133,6 +138,15 @@ const serviceCreateSchema = z.object({
 });
 
 const serviceUpdateSchema = serviceCreateSchema.omit({ code: true }).partial();
+
+const serviceDomainCreateSchema = z.object({
+  code: z.string().trim().max(64).optional(),
+  isActive: z.boolean().optional(),
+  name: z.string().trim().min(2).max(160),
+  sortOrder: z.number().int().min(0).max(100000).optional(),
+});
+
+const serviceDomainUpdateSchema = serviceDomainCreateSchema.omit({ code: true }).partial();
 
 const pricingSlabCreateSchema = z.object({
   baseAmount: z.number().min(0),
@@ -279,6 +293,47 @@ const rbacUserRoleSchema = z.object({
   roleCode: z.string().trim().min(1).max(64),
 });
 
+const adminUserCreateSchema = z.object({
+  active: z.boolean().optional(),
+  city: z.string().trim().max(100).nullable().optional(),
+  counselPartnerId: z.string().trim().min(1).max(64).nullable().optional(),
+  displayName: z.string().trim().min(2).max(160),
+  email: z.string().trim().email().max(255).transform((value) => value.toLowerCase()),
+  jobTitle: z.string().trim().max(120).nullable().optional(),
+  loginEnabled: z.boolean().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+  phone: z
+    .string()
+    .trim()
+    .regex(/^[0-9+\-().\s]{6,40}$/, 'Enter a valid phone number.')
+    .nullable()
+    .optional(),
+  provisioningKind: z.enum(['admin', 'advocate', 'billing_staff', 'internal_staff']).optional(),
+  requirePasswordRotation: z.boolean().optional(),
+  roleCode: z.string().trim().min(1).max(64),
+  sendSetupEmail: z.boolean().optional(),
+  staffProfileUserId: z.string().trim().min(1).max(64).nullable().optional(),
+  state: z.string().trim().max(100).nullable().optional(),
+});
+
+const adminUserUpdateSchema = z.object({
+  active: z.boolean().optional(),
+  loginEnabled: z.boolean().optional(),
+}).refine((value) => value.active !== undefined || value.loginEnabled !== undefined, {
+  message: 'Choose whether admin login should be enabled.',
+});
+
+const teamMemberEnableLoginSchema = z.object({
+  note: z.string().trim().max(1000).nullable().optional(),
+  requirePasswordRotation: z.boolean().optional(),
+  roleCode: z.string().trim().min(1).max(64).nullable().optional(),
+  sendSetupEmail: z.boolean().optional(),
+});
+
+const teamMemberLoginUpdateSchema = z.object({
+  loginEnabled: z.boolean(),
+});
+
 settingsRouter.get(
   '/settings/workspace',
   asyncHandler(async (request, response) => {
@@ -405,6 +460,23 @@ settingsRouter.delete(
   })
 );
 
+settingsRouter.post(
+  '/settings/admin-users',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'rbac.manage');
+    response.status(201).json(await createAdminUser(actor, adminUserCreateSchema.parse(request.body)));
+  })
+);
+
+settingsRouter.patch(
+  '/settings/admin-users/:userId',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'rbac.manage');
+    const userId = z.string().trim().min(1).max(64).parse(request.params.userId);
+    response.json(await updateAdminUser(actor, userId, adminUserUpdateSchema.parse(request.body)));
+  })
+);
+
 settingsRouter.patch(
   '/settings/platform/:key',
   asyncHandler(async (request, response) => {
@@ -448,11 +520,61 @@ settingsRouter.post(
   })
 );
 
+settingsRouter.post(
+  '/settings/team/members/:memberId/enable-login',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'rbac.manage');
+    requirePermission(actor, 'counsel_partner.manage');
+    const memberId = z.string().trim().min(1).max(64).parse(request.params.memberId);
+    response.status(201).json(
+      await enableTeamMemberLogin(actor, memberId, teamMemberEnableLoginSchema.parse(request.body))
+    );
+  })
+);
+
+settingsRouter.patch(
+  '/settings/team/members/:memberId/login',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'rbac.manage');
+    requirePermission(actor, 'counsel_partner.manage');
+    const memberId = z.string().trim().min(1).max(64).parse(request.params.memberId);
+    response.json(
+      await updateTeamMemberLogin(actor, memberId, teamMemberLoginUpdateSchema.parse(request.body))
+    );
+  })
+);
+
 settingsRouter.get(
   '/settings/service-catalog',
   asyncHandler(async (request, response) => {
     requirePermission(await requireReadActor(request), 'dashboard.view');
     response.json(await getServiceCatalog());
+  })
+);
+
+settingsRouter.post(
+  '/settings/service-catalog/domains',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'settings.manage');
+    response.status(201).json(await createServiceDomain(actor, serviceDomainCreateSchema.parse(request.body)));
+  })
+);
+
+settingsRouter.patch(
+  '/settings/service-catalog/domains/:domainCode',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'settings.manage');
+    const domainCode = z.string().trim().min(1).max(64).parse(request.params.domainCode);
+    response.json(await updateServiceDomain(actor, domainCode, serviceDomainUpdateSchema.parse(request.body)));
+  })
+);
+
+settingsRouter.post(
+  '/settings/service-catalog/domains/:domainCode/archive',
+  asyncHandler(async (request, response) => {
+    const actor = await requireMutationPermission(request, 'settings.manage');
+    const domainCode = z.string().trim().min(1).max(64).parse(request.params.domainCode);
+    response.json(await archiveServiceDomain(actor, domainCode));
   })
 );
 

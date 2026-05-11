@@ -398,6 +398,10 @@ Bootstrap:
 
 - `ADMIN_BOOTSTRAP_ENABLED=false` after the first production admin is created.
 - Keep bootstrap passwords only in ignored server env files when temporarily needed.
+- `ADMIN_BOOTSTRAP_ROLE` should normally be `ops_admin` for the first admin.
+  Seeded operational roles also include `case_manager`, `billing_admin`,
+  `billing_staff`, `case_staff`, and `advocate`; restricted roles are intended
+  for in-app provisioning after the first admin exists.
 
 ## Frontend Required Values
 
